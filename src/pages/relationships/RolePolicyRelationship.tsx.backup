@@ -1,0 +1,270 @@
+/**
+ * Role-Policy Relationship Management
+ * 
+ * This component manages the many-to-many relationship between Roles and Policies
+ * through the role_policies junction table. This replaces the old JSON expression-based
+ * role-policy assignment system.
+ * 
+ * Architecture: Role → RolePolicy → Policy → EndpointPolicy → Endpoint
+ */
+
+import { useState } from 'react';
+import {
+  Table,
+  Button,
+  Space,
+  Modal,
+  Form,
+  Select,
+  message,
+  Typography,
+  Input,
+  Tag,
+  Tooltip,
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import {
+  SearchOutlined,
+  ReloadOutlined,
+  EditOutlined,
+} from '@ant-design/icons';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '../../services/api';
+import type { Role, Policy } from '../../types';
+
+const { Title, Paragraph } = Typography;
+
+interface RoleWithPolicies extends Role {
+  policyCount?: number;
+  policies?: Policy[];
+}
+
+export const RolePolicyRelationship = () => {
+  const [searchText, setSearchText] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedRole, setSelectedRole] = useState<Role | null>(null);
+  const [form] = Form.useForm();
+  const queryClient = useQueryClient();
+
+  // Fetch all roles
+  const { data: roles = [], isLoading, refetch } = useQuery({
+    queryKey: ['roles'],
+    queryFn: async () => {
+      const response = await api.roles.getAll();
+      return response.data as Role[];
+    },
+  });
+
+  // Fetch all policies for dropdown
+  const { data: policies = [] } = useQuery({
+    queryKey: ['policies'],
+    queryFn: async () => {
+      const response = await api.policies.getAll();
+      return response.data as Policy[];
+    },
+  });
+
+  // Assign/Update policies to role mutation
+  const assignPoliciesMutation = useMutation({
+    mutationFn: ({ roleId, policyIds }: { roleId: number; policyIds: number[] }) =>
+      api.roles.replacePolicies(roleId, policyIds),
+    onSuccess: () => {
+      message.success('Policies assigned successfully');
+      queryClient.invalidateQueries({ queryKey: ['roles'] });
+      setIsModalOpen(false);
+      setSelectedRole(null);
+      form.resetFields();
+      refetch();
+    },
+    onError: (error: any) => {
+      message.error(error.response?.data?.message || 'Failed to assign policies');
+    },
+  });
+
+  // Handle opening the assign modal
+  const handleAssignPolicies = async (role: Role) => {
+    setSelectedRole(role);
+    
+    // Fetch existing policies for the role
+    try {
+      const response = await api.roles.getPolicies(role.id);
+      const existingPolicies = response.data.policies || [];
+      form.setFieldsValue({
+        roleId: role.id,
+        policyIds: existingPolicies.map((p: Policy) => p.id),
+      });
+    } catch (error) {
+      console.error('Failed to fetch existing policies:', error);
+      form.setFieldsValue({
+        roleId: role.id,
+        policyIds: [],
+      });
+    }
+    
+    setIsModalOpen(true);
+  };
+
+  // Handle submitting policy assignment
+  const handleSubmit = async () => {
+    try {
+      const values = await form.validateFields();
+      assignPoliciesMutation.mutate({
+        roleId: values.roleId,
+        policyIds: values.policyIds || [],
+      });
+    } catch (error) {
+      console.error('Validation failed:', error);
+    }
+  };
+
+  // Filter roles based on search
+  const filteredRoles = roles.filter(
+    (role) =>
+      role.name.toLowerCase().includes(searchText.toLowerCase()) ||
+      (role.description && role.description.toLowerCase().includes(searchText.toLowerCase()))
+  );
+
+  // Table columns
+  const columns: ColumnsType<RoleWithPolicies> = [
+    {
+      title: 'Role ID',
+      dataIndex: 'id',
+      key: 'id',
+      width: 80,
+    },
+    {
+      title: 'Role Name',
+      dataIndex: 'name',
+      key: 'name',
+      render: (text) => <strong>{text}</strong>,
+    },
+    {
+      title: 'Description',
+      dataIndex: 'description',
+      key: 'description',
+      ellipsis: true,
+    },
+    {
+      title: 'Assigned Policies',
+      key: 'policies',
+      render: () => (
+        <Tooltip title="Click 'Manage Policies' to view details">
+          <Tag color="blue">View Policies</Tag>
+        </Tooltip>
+      ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 180,
+      render: (_, record) => (
+        <Space size="small">
+          <Tooltip title="Assign or update policies for this role">
+            <Button
+              type="link"
+              icon={<EditOutlined />}
+              onClick={() => handleAssignPolicies(record)}
+              size="small"
+            >
+              Manage Policies
+            </Button>
+          </Tooltip>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <Title level={4} style={{ marginTop: 0 }}>
+          Role-Policy Relationships
+        </Title>
+        <Paragraph type="secondary">
+          Manage which policies are assigned to each role. This replaces the old JSON
+          expression-based system with a proper relational model for better manageability
+          and performance.
+        </Paragraph>
+      </div>
+
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+        <Space>
+          <Input
+            placeholder="Search by role name or description..."
+            prefix={<SearchOutlined />}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ width: 300 }}
+            allowClear
+          />
+          <Button icon={<ReloadOutlined />} onClick={() => refetch()}>
+            Refresh
+          </Button>
+        </Space>
+      </div>
+
+      <Table
+        columns={columns}
+        dataSource={filteredRoles}
+        rowKey="id"
+        loading={isLoading}
+        pagination={{
+          pageSize: 20,
+          showSizeChanger: true,
+          pageSizeOptions: ['10', '20', '50', '100'],
+          showTotal: (total) => `Total: ${total} roles`,
+        }}
+        size="small"
+      />
+
+      {/* Assign/Update Policies Modal */}
+      <Modal
+        title={`Manage Policies for ${selectedRole?.name || ''}`}
+        open={isModalOpen}
+        onOk={handleSubmit}
+        onCancel={() => {
+          setIsModalOpen(false);
+          setSelectedRole(null);
+          form.resetFields();
+        }}
+        confirmLoading={assignPoliciesMutation.isPending}
+        width={600}
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="roleId" hidden>
+            <Input />
+          </Form.Item>
+
+          <Form.Item
+            name="policyIds"
+            label="Assign Policies"
+            help="Select the policies to assign to this role. Previous assignments will be replaced."
+          >
+            <Select
+              mode="multiple"
+              placeholder="Select policies"
+              options={policies.map((policy: Policy) => ({
+                label: `${policy.name} (${policy.type})${policy.policyType ? ` - ${policy.policyType}` : ''}`,
+                value: policy.id,
+                disabled: !policy.isActive,
+              }))}
+              filterOption={(input, option) =>
+                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+              }
+              showSearch
+              allowClear
+            />
+          </Form.Item>
+
+          <Paragraph type="secondary" style={{ fontSize: '12px', marginTop: 8 }}>
+            <strong>Note:</strong> This uses the new role_policies junction table instead of
+            JSON expressions. Policies are assigned directly to roles with proper foreign key
+            relationships.
+          </Paragraph>
+        </Form>
+      </Modal>
+    </div>
+  );
+};
+
+export default RolePolicyRelationship;
