@@ -84,7 +84,13 @@ export const Policies = () => {
       editForm.resetFields();
     },
     onError: (error: any) => {
-      message.error(error.response?.data?.error || 'Failed to update policy');
+      console.error('Update policy error:', error);
+      console.error('Error response:', error.response?.data);
+      const errorMessage = error.response?.data?.message 
+        || error.response?.data?.error 
+        || error.message 
+        || 'Failed to update policy';
+      message.error(errorMessage);
     },
   });
 
@@ -145,6 +151,9 @@ export const Policies = () => {
   const handleUpdatePolicy = async () => {
     try {
       const values = await editForm.validateFields();
+      console.log('Updating policy with values:', values);
+      console.log('Selected policy:', selectedPolicy);
+      
       // Validate JSON conditions if provided
       if (values.conditions) {
         try {

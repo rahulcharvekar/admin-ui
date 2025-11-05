@@ -414,9 +414,29 @@ export const AccessVisualization = () => {
           const policyY = 380;
           const policyNodeId = `policy-${userId}-${i}-${j}`;
           const isPolicyExpanded = expanded.has(policyNodeId);
+          
+          // Calculate total actions and unique pages across all endpoints in this policy
+          let totalActions = 0;
+          const uniquePolicyPages = new Set<string>();
+          endpoints.forEach((endpoint) => {
+            const actions = endpoint.page_actions || [];
+            totalActions += actions.length;
+            actions.forEach((actionItem) => {
+              if (actionItem.page) {
+                const pageKey =
+                  actionItem.page.key || actionItem.page.route || actionItem.page.label || actionItem.action;
+                uniquePolicyPages.add(pageKey);
+              }
+            });
+          });
+          
           const policyLabelParts: string[] = [];
           const endpointCountLabel = formatCountLabel(endpoints.length, 'endpoint');
           if (endpointCountLabel) policyLabelParts.push(endpointCountLabel);
+          const actionsCountLabel = formatCountLabel(totalActions, 'action');
+          if (actionsCountLabel) policyLabelParts.push(actionsCountLabel);
+          const pagesCountLabel = formatCountLabel(uniquePolicyPages.size, 'page');
+          if (pagesCountLabel) policyLabelParts.push(pagesCountLabel);
           const policyLabelDetails = policyLabelParts.length ? `\n(${policyLabelParts.join(', ')})` : '';
 
           newNodes.push(

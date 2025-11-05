@@ -5,9 +5,9 @@ import {
   LockOutlined,
   ApiOutlined,
   FileTextOutlined,
-  AppstoreOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 
 const { Title } = Typography;
@@ -19,6 +19,8 @@ interface ServiceCatalogResponse {
 }
 
 export const Dashboard = () => {
+  const navigate = useNavigate();
+  
   // Fetch service catalog for counts
   const { data: serviceCatalog, isLoading: catalogLoading, error: catalogError } = useQuery<ServiceCatalogResponse>({
     queryKey: ['service-catalog'],
@@ -64,7 +66,6 @@ export const Dashboard = () => {
     ? Object.values(serviceCatalog.endpoints).reduce((total, endpoints) => total + endpoints.length, 0)
     : 0;
   const pageCount = serviceCatalog?.pages ? serviceCatalog.pages.length : 0;
-  const serviceCount = serviceCatalog?.endpoints ? Object.keys(serviceCatalog.endpoints).length : 0;
 
   const isLoading = catalogLoading || usersLoading || rolesLoading || policiesLoading;
 
@@ -90,7 +91,11 @@ export const Dashboard = () => {
       ) : (
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} lg={8}>
-            <Card>
+            <Card 
+              hoverable
+              onClick={() => navigate('/users')}
+              style={{ cursor: 'pointer' }}
+            >
               <Statistic
                 title="Total Users"
                 value={userCount}
@@ -100,7 +105,11 @@ export const Dashboard = () => {
             </Card>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Card>
+            <Card 
+              hoverable
+              onClick={() => navigate('/roles')}
+              style={{ cursor: 'pointer' }}
+            >
               <Statistic
                 title="Total Roles"
                 value={roleCount}
@@ -110,7 +119,11 @@ export const Dashboard = () => {
             </Card>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Card>
+            <Card 
+              hoverable
+              onClick={() => navigate('/policies')}
+              style={{ cursor: 'pointer' }}
+            >
               <Statistic
                 title="Total Policies"
                 value={policyCount}
@@ -120,17 +133,11 @@ export const Dashboard = () => {
             </Card>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Card>
-              <Statistic
-                title="Total Services"
-                value={serviceCount}
-                prefix={<AppstoreOutlined />}
-                valueStyle={{ color: '#722ed1' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} lg={8}>
-            <Card>
+            <Card 
+              hoverable
+              onClick={() => navigate('/endpoints')}
+              style={{ cursor: 'pointer' }}
+            >
               <Statistic
                 title="Total Endpoints"
                 value={endpointCount}
@@ -140,7 +147,11 @@ export const Dashboard = () => {
             </Card>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Card>
+            <Card 
+              hoverable
+              onClick={() => navigate('/pages')}
+              style={{ cursor: 'pointer' }}
+            >
               <Statistic
                 title="Total UI Pages"
                 value={pageCount}
