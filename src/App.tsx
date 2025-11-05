@@ -1,14 +1,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, App as AntApp } from 'antd';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { Users } from './pages/Users';
 import { Roles } from './pages/Roles';
 import { Policies } from './pages/Policies';
 import { Endpoints } from './pages/Endpoints';
-import { Pages } from './pages/Pages';
-import { PageActions } from './pages/PageActions';
+import { PageWorkspace } from './pages/PageWorkspace';
 import { AuditLogs } from './pages/AuditLogs';
 import { AccessVisualization } from './pages/AccessVisualization';
 import { PolicyEndpointRelationship } from './pages/relationships/PolicyEndpointRelationship';
@@ -41,10 +40,11 @@ function App() {
           },
         }}
       >
-        <BrowserRouter>
-          <Routes>
-            {/* Public routes */}
-            <Route path="/login" element={<Login />} />
+        <AntApp>
+          <BrowserRouter>
+            <Routes>
+              {/* Public routes */}
+              <Route path="/login" element={<Login />} />
 
             {/* Protected routes */}
             <Route
@@ -64,9 +64,9 @@ function App() {
               <Route path="policies" element={<Policies />} />
               <Route path="policies/endpoints" element={<PolicyEndpointRelationship />} />
               <Route path="endpoints" element={<Endpoints />} />
-              <Route path="pages" element={<Pages />} />
+              <Route path="pages" element={<PageWorkspace />} />
               <Route path="pages/actions" element={<PageActionAssignment />} />
-              <Route path="page-actions" element={<PageActions />} />
+              <Route path="page-actions" element={<PageWorkspace />} />
               <Route path="page-actions/endpoints" element={<PageActionEndpointAssignment />} />
               <Route path="access-visualization" element={<AccessVisualization />} />
               <Route path="audit-logs" element={<AuditLogs />} />
@@ -76,6 +76,7 @@ function App() {
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </BrowserRouter>
+        </AntApp>
       </ConfigProvider>
     </QueryClientProvider>
   );

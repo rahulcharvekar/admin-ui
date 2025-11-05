@@ -4,7 +4,7 @@ export interface User {
   username: string;
   email: string;
   fullName: string;
-  enabled: boolean;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
   permissionVersion: number;
@@ -120,6 +120,7 @@ export interface CreateUserRequest {
   roleIds?: number[];
   boardId?: string;
   employerId?: string;
+  isActive?: boolean;
 }
 
 export interface UpdateUserRequest {
@@ -129,6 +130,7 @@ export interface UpdateUserRequest {
   fullName?: string;
   boardId?: string;
   employerId?: string;
+  isActive?: boolean;
 }
 
 // API Response types

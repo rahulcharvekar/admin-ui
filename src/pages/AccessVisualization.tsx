@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Card, Select, Spin, Alert, Typography, Space, Button, Tag } from 'antd';
 import ReactFlow, {
   Controls,
@@ -15,10 +15,26 @@ import { api } from '../services/api';
 const { Title } = Typography;
 const { Option } = Select;
 
+const formatCountLabel = (count: number, singular: string, plural?: string) => {
+  if (count === 0) return '';
+  const label = count === 1 ? singular : plural ?? `${singular}s`;
+  return `${count} ${label}`;
+};
+
+const summaryCountLabel = (count: number, singular: string, plural?: string) => {
+  const formatted = formatCountLabel(count, singular, plural);
+  if (formatted) return formatted;
+  if (plural) return `0 ${plural}`;
+  if (singular.endsWith('y')) return `0 ${singular.slice(0, -1)}ies`;
+  if (/[sxz]$/.test(singular) || /(?:sh|ch)$/.test(singular)) return `0 ${singular}es`;
+  return `0 ${singular}s`;
+};
+
 interface UserData {
   id: number;
   username: string;
   fullName: string;
+  email?: string;
 }
 
 interface PageData {
@@ -35,102 +51,57 @@ interface PageData {
   updatedAt?: string | null;
 }
 
-interface EndpointData {
-  id: number;
-  service: string;
-  version: string;
-  method: string;
-  path: string;
-  description: string;
-  ui_type: string | null;
-  is_active: boolean;
-}
-
-interface ActionData {
-  id: number;
-  label: string;
-  action: string;
-  variant: string;
-  icon: string;
-  display_order: number;
-  is_active: boolean;
-  endpoint: EndpointData;
-}
-
-interface PageAccessData {
-  id: number;
-  key: string;
-  label: string;
-  route: string;
-  module: string;
-  icon: string;
-  parent_id: number | null;
-  display_order: number;
-  is_menu_item: boolean;
-  is_active: boolean;
-  actions: ActionData[];
-  action_count: number;
-}
-
 interface UiAccessMatrixResponse {
   generated_at: string;
   version: number;
   page_id: number;
-  counts: {
-    pages: number;
-    page_actions: number;
-    endpoints: number;
+  page: {
+    key: string;
+    label: string;
+    route: string;
   };
-  ui: PageAccessData[];
+  actions: {
+    label: string;
+    action: string;
+    endpoint?: {
+      service: string;
+      version: string;
+      method: string;
+      path: string;
+      description?: string;
+    };
+  }[];
 }
 
-interface UserEndpointData {
-  id: number;
+interface UserAccessMatrixPageAction {
+  action: string;
+  label: string;
+  page?: {
+    key: string;
+    label: string;
+    route: string;
+  };
+}
+
+interface UserAccessMatrixEndpoint {
   service: string;
   version: string;
   method: string;
   path: string;
-  description: string;
-  ui_type: string | null;
-  is_active: boolean;
+  description?: string;
+  page_actions: UserAccessMatrixPageAction[];
 }
 
-interface UserPolicyData {
-  id: number;
+interface UserAccessMatrixPolicy {
   name: string;
-  description: string;
-  type: string;
-  policy_type: string;
-  is_active: boolean;
-  endpoints: UserEndpointData[];
-  endpoint_count: number;
+  description?: string;
+  endpoints: UserAccessMatrixEndpoint[];
 }
 
-interface UserRoleData {
-  id: number;
+interface UserAccessMatrixRole {
   name: string;
-  description: string;
-  is_active: boolean;
-  policies: UserPolicyData[];
-  policy_count: number;
-  endpoint_count: number;
-}
-
-interface UserAccessData {
-  id: number;
-  username: string;
-  email: string;
-  full_name: string;
-  enabled: boolean;
-  account_non_locked: boolean;
-  account_non_expired: boolean;
-  credentials_non_expired: boolean;
-  permission_version: number;
-  legacy_role: string;
-  roles: UserRoleData[];
-  role_count: number;
-  policy_count: number;
-  endpoint_count: number;
+  description?: string;
+  policies: UserAccessMatrixPolicy[];
 }
 
 interface UserAccessMatrixResponse {
@@ -139,15 +110,25 @@ interface UserAccessMatrixResponse {
   filters: {
     user_id: number;
   };
-  counts: {
-    users: number;
-    roles: number;
-    policies: number;
-    endpoints: number;
-    active_policies_total: number;
-    active_endpoints_total: number;
+  roles: UserAccessMatrixRole[];
+}
+
+interface ProcessedUserAccessData {
+  id: number;
+  username: string;
+  fullName?: string;
+  email?: string;
+  roles: UserAccessMatrixRole[];
+}
+
+interface ProcessedPageAccessData {
+  pageId: number;
+  page: {
+    key: string;
+    label: string;
+    route: string;
   };
-  rbac: UserAccessData[];
+  actions: UiAccessMatrixResponse['actions'];
 }
 
 export const AccessVisualization = () => {
@@ -163,8 +144,8 @@ export const AccessVisualization = () => {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   
   // Store full data for rebuild on expand/collapse
-  const [userAccessData, setUserAccessData] = useState<UserAccessData | null>(null);
-  const [pageAccessData, setPageAccessData] = useState<PageAccessData | null>(null);
+  const [userAccessData, setUserAccessData] = useState<ProcessedUserAccessData | null>(null);
+  const [pageAccessData, setPageAccessData] = useState<ProcessedPageAccessData | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -182,14 +163,76 @@ export const AccessVisualization = () => {
     });
   }, []);
 
-  // Rebuild visualization when expanded nodes change
-  useEffect(() => {
-    if (viewType === 'user' && userAccessData && selectedUser) {
-      buildUserAccessVisualization(userAccessData, expandedNodes);
-    } else if (viewType === 'page' && pageAccessData && selectedPage) {
-      buildPageAccessVisualization(pageAccessData, expandedNodes);
-    }
-  }, [expandedNodes]);
+  const userSummary = useMemo(() => {
+    if (!userAccessData) return null;
+
+    const roles = userAccessData.roles || [];
+    let policiesCount = 0;
+    let endpointsCount = 0;
+    let actionsCount = 0;
+    const pageKeys = new Set<string>();
+
+    roles.forEach((role) => {
+      const policies = role.policies || [];
+      policiesCount += policies.length;
+
+      policies.forEach((policy) => {
+        const endpoints = policy.endpoints || [];
+        endpointsCount += endpoints.length;
+
+        endpoints.forEach((endpoint) => {
+          const actions = endpoint.page_actions || [];
+          actionsCount += actions.length;
+
+          actions.forEach((action) => {
+            if (action.page) {
+              const pageKey =
+                action.page.key ||
+                action.page.route ||
+                action.page.label ||
+                action.label ||
+                action.action ||
+                '';
+              if (pageKey) pageKeys.add(pageKey);
+            }
+          });
+        });
+      });
+    });
+
+    const userLabel = userAccessData.fullName
+      ? `${userAccessData.fullName} (${userAccessData.username})`
+      : userAccessData.username;
+
+    return {
+      userLabel,
+      rolesLabel: summaryCountLabel(roles.length, 'role'),
+      policiesLabel: summaryCountLabel(policiesCount, 'policy', 'policies'),
+      endpointsLabel: summaryCountLabel(endpointsCount, 'endpoint'),
+      actionsLabel: summaryCountLabel(actionsCount, 'action'),
+      pagesLabel: summaryCountLabel(pageKeys.size, 'page'),
+    };
+  }, [userAccessData]);
+
+  const pageSummary = useMemo(() => {
+    if (!pageAccessData) return null;
+
+    const actions = pageAccessData.actions || [];
+    const endpointsCount = actions.reduce(
+      (sum, action) => sum + (action.endpoint ? 1 : 0),
+      0
+    );
+
+    const pageLabel = pageAccessData.page.route
+      ? `${pageAccessData.page.label} (${pageAccessData.page.route})`
+      : pageAccessData.page.label;
+
+    return {
+      pageLabel,
+      actionsLabel: summaryCountLabel(actions.length, 'action'),
+      endpointsLabel: summaryCountLabel(endpointsCount, 'endpoint'),
+    };
+  }, [pageAccessData]);
 
   // Fetch users and pages on mount
   useEffect(() => {
@@ -249,17 +292,22 @@ export const AccessVisualization = () => {
   }, []);
 
   // Build user access visualization with expand/collapse
-  const buildUserAccessVisualization = useCallback((userData: UserAccessData, expanded: Set<string>) => {
+  const buildUserAccessVisualization = useCallback((userData: ProcessedUserAccessData, expanded: Set<string>) => {
     const newNodes: Node[] = [];
     const newEdges: Edge[] = [];
     const userId = userData.id;
 
     // User node (root) - at the top center
     const userNodeId = `user-${userId}`;
+    const roles = userData.roles || [];
+    const userDisplayName = userData.fullName
+      ? `${userData.fullName}\n(${userData.username})`
+      : userData.username;
+
     newNodes.push(
       createExpandableNode(
         userNodeId,
-        userData.full_name || userData.username,
+        userDisplayName,
         { x: 400, y: 50 },
         {
           background: '#e6f7ff',
@@ -268,29 +316,66 @@ export const AccessVisualization = () => {
           borderRadius: '8px',
           fontWeight: 'bold',
           fontSize: '14px',
+          textAlign: 'center',
+          whiteSpace: 'pre-wrap',
         },
-        userData.roles.length > 0,
+        roles.length > 0,
         true,
         undefined
       )
     );
 
     // Roles nodes - horizontal row below user
-    const rolesCount = userData.roles.length;
+    const rolesCount = roles.length;
     const roleSpacing = 250;
     const roleStartX = 400 - ((rolesCount - 1) * roleSpacing) / 2;
     
-    for (let i = 0; i < userData.roles.length; i++) {
-      const role = userData.roles[i];
+    for (let i = 0; i < roles.length; i++) {
+      const role = roles[i];
+      const policies = role.policies || [];
       const roleX = roleStartX + (i * roleSpacing);
       const roleY = 200;
-      const roleNodeId = `role-${role.id}`;
+      const roleNodeId = `role-${userId}-${i}`;
       const isRoleExpanded = expanded.has(roleNodeId);
+      let roleEndpointTotal = 0;
+      let roleActionTotal = 0;
+      const rolePageKeys = new Set<string>();
+
+      policies.forEach((policy) => {
+        const endpoints = policy.endpoints || [];
+        roleEndpointTotal += endpoints.length;
+        endpoints.forEach((endpoint) => {
+          const actions = endpoint.page_actions || [];
+          roleActionTotal += actions.length;
+          actions.forEach((actionItem) => {
+            if (actionItem.page) {
+              const pageKey =
+                actionItem.page.key ||
+                actionItem.page.route ||
+                actionItem.page.label ||
+                actionItem.label ||
+                actionItem.action ||
+                '';
+              if (pageKey) rolePageKeys.add(pageKey);
+            }
+          });
+        });
+      });
+      const roleLabelParts: string[] = [];
+      const policyCountLabel = formatCountLabel(policies.length, 'policy');
+      if (policyCountLabel) roleLabelParts.push(policyCountLabel);
+      const endpointCountLabel = formatCountLabel(roleEndpointTotal, 'endpoint');
+      if (endpointCountLabel) roleLabelParts.push(endpointCountLabel);
+      const actionCountLabel = formatCountLabel(roleActionTotal, 'action');
+      if (actionCountLabel) roleLabelParts.push(actionCountLabel);
+      const pageCountLabel = formatCountLabel(rolePageKeys.size, 'page');
+      if (pageCountLabel) roleLabelParts.push(pageCountLabel);
+      const roleLabelDetails = roleLabelParts.length ? `\n(${roleLabelParts.join(', ')})` : '';
 
       newNodes.push(
         createExpandableNode(
           roleNodeId,
-          `${role.name}\n(${role.policy_count} policies)`,
+          `${role.name}${roleLabelDetails}`,
           { x: roleX, y: roleY },
           {
             background: '#f6ffed',
@@ -301,7 +386,7 @@ export const AccessVisualization = () => {
             textAlign: 'center',
             minWidth: '180px',
           },
-          role.policies.length > 0,
+          policies.length > 0,
           isRoleExpanded,
           () => toggleNodeExpansion(roleNodeId)
         )
@@ -318,21 +403,26 @@ export const AccessVisualization = () => {
 
       // Only show policies if role is expanded
       if (isRoleExpanded) {
-        const policiesCount = role.policies.length;
+        const policiesCount = policies.length;
         const policySpacing = 200;
         const policyStartX = roleX - ((policiesCount - 1) * policySpacing) / 2;
         
-        for (let j = 0; j < role.policies.length; j++) {
-          const policy = role.policies[j];
+        for (let j = 0; j < policies.length; j++) {
+          const policy = policies[j];
+          const endpoints = policy.endpoints || [];
           const policyX = policyStartX + (j * policySpacing);
           const policyY = 380;
-          const policyNodeId = `policy-${policy.id}-role-${role.id}`;
+          const policyNodeId = `policy-${userId}-${i}-${j}`;
           const isPolicyExpanded = expanded.has(policyNodeId);
+          const policyLabelParts: string[] = [];
+          const endpointCountLabel = formatCountLabel(endpoints.length, 'endpoint');
+          if (endpointCountLabel) policyLabelParts.push(endpointCountLabel);
+          const policyLabelDetails = policyLabelParts.length ? `\n(${policyLabelParts.join(', ')})` : '';
 
           newNodes.push(
             createExpandableNode(
               policyNodeId,
-              `${policy.name}\n(${policy.endpoint_count} endpoints)`,
+              `${policy.name}${policyLabelDetails}`,
               { x: policyX, y: policyY },
               {
                 background: '#fff7e6',
@@ -343,7 +433,7 @@ export const AccessVisualization = () => {
                 textAlign: 'center',
                 minWidth: '160px',
               },
-              policy.endpoints.length > 0,
+              endpoints.length > 0,
               isPolicyExpanded,
               () => toggleNodeExpansion(policyNodeId)
             )
@@ -360,20 +450,37 @@ export const AccessVisualization = () => {
 
           // Only show endpoints if policy is expanded
           if (isPolicyExpanded) {
-            const endpointsCount = policy.endpoints.length;
+            const endpointsCount = endpoints.length;
             const endpointSpacing = 180;
             const endpointStartX = policyX - ((endpointsCount - 1) * endpointSpacing) / 2;
             
-            for (let k = 0; k < policy.endpoints.length; k++) {
-              const endpoint = policy.endpoints[k];
+            for (let k = 0; k < endpoints.length; k++) {
+              const endpoint = endpoints[k];
+              const actions = endpoint.page_actions || [];
               const endpointX = endpointStartX + (k * endpointSpacing);
               const endpointY = 560;
-              const endpointNodeId = `endpoint-${endpoint.id}-policy-${policy.id}-role-${role.id}`;
+              const endpointNodeId = `endpoint-${userId}-${i}-${j}-${k}`;
+              const isEndpointExpanded = expanded.has(endpointNodeId);
+              const endpointLabelParts: string[] = [];
+              const actionsCountLabel = formatCountLabel(actions.length, 'action');
+              if (actionsCountLabel) endpointLabelParts.push(actionsCountLabel);
+              const uniquePageKeys = new Set<string>();
+              actions.forEach((actionItem) => {
+                if (actionItem.page) {
+                  const pageKey =
+                    actionItem.page.key || actionItem.page.route || actionItem.page.label || actionItem.action;
+                  uniquePageKeys.add(pageKey);
+                }
+              });
+              const pageCountLabel = formatCountLabel(uniquePageKeys.size, 'page');
+              if (pageCountLabel) endpointLabelParts.push(pageCountLabel);
+              const endpointLabelSuffix = endpointLabelParts.length ? `\n(${endpointLabelParts.join(', ')})` : '';
+              const endpointLabel = `${endpoint.method}\n${endpoint.path}${endpointLabelSuffix}`;
 
               newNodes.push(
                 createExpandableNode(
                   endpointNodeId,
-                  `${endpoint.method}\n${endpoint.path}`,
+                  endpointLabel,
                   { x: endpointX, y: endpointY },
                   {
                     background: '#fff1f0',
@@ -387,9 +494,9 @@ export const AccessVisualization = () => {
                     wordBreak: 'break-word',
                     minWidth: '140px',
                   },
-                  false,
-                  false,
-                  undefined
+                  actions.length > 0,
+                  isEndpointExpanded,
+                  actions.length > 0 ? () => toggleNodeExpansion(endpointNodeId) : undefined
                 )
               );
 
@@ -400,6 +507,104 @@ export const AccessVisualization = () => {
                 markerEnd: { type: MarkerType.ArrowClosed },
                 style: { stroke: '#ff4d4f', strokeWidth: 1 },
               });
+
+              // Only show page actions if endpoint is expanded
+              if (isEndpointExpanded && actions.length > 0) {
+                const actionsCount = actions.length;
+                const actionSpacing = 160;
+                const actionStartX = endpointX - ((actionsCount - 1) * actionSpacing) / 2;
+
+                for (let m = 0; m < actions.length; m++) {
+                  const action = actions[m];
+                  const actionX = actionStartX + (m * actionSpacing);
+                  const actionY = 740;
+                  const actionNodeId = `page-action-${userId}-${i}-${j}-${k}-${m}`;
+                  const actionLabelBase = action.label || action.action || 'Action';
+                  const actionPages = action.page ? [action.page] : [];
+                  const actionPageCountLabel = formatCountLabel(actionPages.length, 'page');
+                  const actionLabelSuffix = actionPageCountLabel ? `\n(${actionPageCountLabel})` : '';
+                  const actionLabel = `${actionLabelBase}${actionLabelSuffix}`;
+                  const actionHasChildren = actionPages.length > 0;
+                  const isActionExpanded = expanded.has(actionNodeId);
+
+                  newNodes.push(
+                    createExpandableNode(
+                      actionNodeId,
+                      actionLabel,
+                      { x: actionX, y: actionY },
+                      {
+                        background: '#e6fffb',
+                        color: '#006d75',
+                        padding: '6px 12px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        textAlign: 'center',
+                        maxWidth: '160px',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        minWidth: '140px',
+                      },
+                      actionHasChildren,
+                      isActionExpanded,
+                      actionHasChildren ? () => toggleNodeExpansion(actionNodeId) : undefined
+                    )
+                  );
+
+                  newEdges.push({
+                    id: `${endpointNodeId}-${actionNodeId}`,
+                    source: endpointNodeId,
+                    target: actionNodeId,
+                    markerEnd: { type: MarkerType.ArrowClosed },
+                    style: { stroke: '#597ef7', strokeWidth: 1 },
+                  });
+
+                  if (isActionExpanded && actionPages.length > 0) {
+                    const pageSpacing = 140;
+                    const pageStartX = actionX - ((actionPages.length - 1) * pageSpacing) / 2;
+
+                    for (let n = 0; n < actionPages.length; n++) {
+                      const page = actionPages[n];
+                      const pageX = pageStartX + (n * pageSpacing);
+                      const pageY = 920;
+                      const pageNodeId = `user-page-${userId}-${i}-${j}-${k}-${m}-${n}`;
+                      const pageLabelBase = page.label || page.key || page.route || 'Page';
+                      const pageRoute = page.route ? `\n${page.route}` : '';
+                      const pageLabel = `${pageLabelBase}${pageRoute}`;
+
+                      newNodes.push(
+                        createExpandableNode(
+                          pageNodeId,
+                          pageLabel,
+                          { x: pageX, y: pageY },
+                          {
+                            background: '#f9f0ff',
+                            color: '#531dab',
+                            padding: '6px 12px',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            textAlign: 'center',
+                            maxWidth: '160px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            minWidth: '140px',
+                          },
+                          false,
+                          false,
+                          undefined
+                        )
+                      );
+
+                      newEdges.push({
+                        id: `${actionNodeId}-${pageNodeId}`,
+                        source: actionNodeId,
+                        target: pageNodeId,
+                        markerEnd: { type: MarkerType.ArrowClosed },
+                        style: { stroke: '#722ed1', strokeWidth: 1 },
+                      });
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -420,8 +625,8 @@ export const AccessVisualization = () => {
       const matrixRes = await api.meta.getUserAccessMatrix(userId);
       const matrixData: UserAccessMatrixResponse = matrixRes.data;
 
-      // Check if we have RBAC data
-      if (!matrixData.rbac || matrixData.rbac.length === 0) {
+      // Check if we have role data
+      if (!matrixData.roles || matrixData.roles.length === 0) {
         setError('No access data found for this user');
         setNodes([]);
         setEdges([]);
@@ -430,14 +635,21 @@ export const AccessVisualization = () => {
         return;
       }
 
-      const userData = matrixData.rbac[0]; // Should only be one user
-      setUserAccessData(userData);
+      const selectedUserMeta = users.find((user) => user.id === userId);
+      const processedData: ProcessedUserAccessData = {
+        id: userId,
+        username: selectedUserMeta?.username || `User ${userId}`,
+        fullName: selectedUserMeta?.fullName,
+        roles: matrixData.roles,
+      };
+
+      setUserAccessData(processedData);
       
       // Initially all nodes are collapsed (empty set)
       const initialExpanded = new Set<string>();
       setExpandedNodes(initialExpanded);
       
-      buildUserAccessVisualization(userData, initialExpanded);
+      buildUserAccessVisualization(processedData, initialExpanded);
     } catch (err: any) {
       console.error('Failed to build user access map:', err);
       setError(err.response?.data?.message || 'Failed to build access map');
@@ -445,20 +657,24 @@ export const AccessVisualization = () => {
     } finally {
       setLoading(false);
     }
-  }, [buildUserAccessVisualization, setNodes, setEdges, setUserAccessData, setExpandedNodes]);
+  }, [buildUserAccessVisualization, setNodes, setEdges, setUserAccessData, setExpandedNodes, users]);
 
   // Build page access visualization with expand/collapse
-  const buildPageAccessVisualization = useCallback((pageData: PageAccessData, expanded: Set<string>) => {
+  const buildPageAccessVisualization = useCallback((pageData: ProcessedPageAccessData, expanded: Set<string>) => {
     const newNodes: Node[] = [];
     const newEdges: Edge[] = [];
-    const pageId = pageData.id;
+    const pageId = pageData.pageId;
+    const actions = pageData.actions || [];
+    const pageLabel = pageData.page.route
+      ? `${pageData.page.label}\n${pageData.page.route}`
+      : pageData.page.label;
 
     // Page node (root) - at the top center
     const pageNodeId = `page-${pageId}`;
     newNodes.push(
       createExpandableNode(
         pageNodeId,
-        pageData.label,
+        pageLabel,
         { x: 400, y: 50 },
         {
           background: '#f9f0ff',
@@ -467,29 +683,36 @@ export const AccessVisualization = () => {
           borderRadius: '8px',
           fontWeight: 'bold',
           fontSize: '14px',
+          textAlign: 'center',
+          whiteSpace: 'pre-wrap',
         },
-        pageData.actions.length > 0,
+        actions.length > 0,
         true,
         undefined
       )
     );
 
     // Actions nodes - horizontal row below page
-    const actionsCount = pageData.actions.length;
+    const actionsCount = actions.length;
     const actionSpacing = 220;
     const actionStartX = 400 - ((actionsCount - 1) * actionSpacing) / 2;
     
-    for (let i = 0; i < pageData.actions.length; i++) {
-      const action = pageData.actions[i];
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
       const actionX = actionStartX + (i * actionSpacing);
       const actionY = 200;
-      const actionNodeId = `action-${action.id}`;
+      const actionNodeId = `action-${pageId}-${i}`;
       const isActionExpanded = expanded.has(actionNodeId);
+      const actionLabelBase = action.label || action.action || 'Action';
+      const actionDetail = action.action ? `\n(${action.action})` : '';
+      const actionHasEndpoint = !!action.endpoint;
+      const endpointCountLabel = actionHasEndpoint ? '\n(1 endpoint)' : '';
+      const actionLabel = `${actionLabelBase}${actionDetail}${endpointCountLabel}`;
 
       newNodes.push(
         createExpandableNode(
           actionNodeId,
-          action.label,
+          actionLabel,
           { x: actionX, y: actionY },
           {
             background: '#e6fffb',
@@ -518,12 +741,13 @@ export const AccessVisualization = () => {
       // Only show endpoint if action is expanded
       if (isActionExpanded && action.endpoint) {
         const endpoint = action.endpoint;
-        const endpointNodeId = `endpoint-${endpoint.id}-${actionNodeId}`;
+        const endpointNodeId = `endpoint-${pageId}-${i}`;
+        const endpointLabel = `${endpoint.method}\n${endpoint.path}\n(1 action)`;
 
         newNodes.push(
           createExpandableNode(
             endpointNodeId,
-            `${endpoint.method}\n${endpoint.path}`,
+            endpointLabel,
             { x: actionX, y: 380 },
             {
               background: '#fff1f0',
@@ -567,8 +791,8 @@ export const AccessVisualization = () => {
       const matrixRes = await api.meta.getUiAccessMatrix(pageId);
       const matrixData: UiAccessMatrixResponse = matrixRes.data;
 
-      // Check if we have UI data
-      if (!matrixData.ui || matrixData.ui.length === 0) {
+      // Check if we have page data
+      if (!matrixData.page) {
         setError('No access data found for this page');
         setNodes([]);
         setEdges([]);
@@ -577,14 +801,19 @@ export const AccessVisualization = () => {
         return;
       }
 
-      const pageData = matrixData.ui[0]; // Should only be one page
-      setPageAccessData(pageData);
+      const processedPageData: ProcessedPageAccessData = {
+        pageId: matrixData.page_id,
+        page: matrixData.page,
+        actions: matrixData.actions || [],
+      };
+
+      setPageAccessData(processedPageData);
       
       // Initially all nodes are collapsed (empty set)
       const initialExpanded = new Set<string>();
       setExpandedNodes(initialExpanded);
       
-      buildPageAccessVisualization(pageData, initialExpanded);
+      buildPageAccessVisualization(processedPageData, initialExpanded);
     } catch (err: any) {
       console.error('Failed to build page access map:', err);
       setError(err.response?.data?.message || 'Failed to build page access map');
@@ -594,10 +823,29 @@ export const AccessVisualization = () => {
     }
   }, [buildPageAccessVisualization, setNodes, setEdges, setPageAccessData, setExpandedNodes]);
 
+  // Rebuild visualization when expanded nodes or data change
+  useEffect(() => {
+    if (viewType === 'user' && userAccessData && selectedUser) {
+      buildUserAccessVisualization(userAccessData, expandedNodes);
+    } else if (viewType === 'page' && pageAccessData && selectedPage) {
+      buildPageAccessVisualization(pageAccessData, expandedNodes);
+    }
+  }, [
+    expandedNodes,
+    viewType,
+    userAccessData,
+    selectedUser,
+    buildUserAccessVisualization,
+    pageAccessData,
+    selectedPage,
+    buildPageAccessVisualization,
+  ]);
+
   // Handle user selection
   const handleUserChange = (userId: number) => {
     setSelectedUser(userId);
     setSelectedPage(null);
+    setPageAccessData(null);
     buildUserAccessMap(userId);
   };
 
@@ -605,6 +853,7 @@ export const AccessVisualization = () => {
   const handlePageChange = (pageId: number) => {
     setSelectedPage(pageId);
     setSelectedUser(null);
+    setUserAccessData(null);
     buildPageAccessMap(pageId);
   };
 
@@ -685,13 +934,24 @@ export const AccessVisualization = () => {
             <Button onClick={handleClear}>Clear</Button>
           </Space>
 
-          <Space>
-            <Tag color="blue">User/Page</Tag>
-            <Tag color="green">Role</Tag>
-            <Tag color="orange">Policy</Tag>
-            <Tag color="cyan">Action</Tag>
-            <Tag color="red">Endpoint</Tag>
-          </Space>
+          {viewType === 'user' && userAccessData && userSummary && (
+            <Space wrap>
+              <Tag color="blue">{userSummary.userLabel}</Tag>
+              <Tag color="green">{userSummary.rolesLabel}</Tag>
+              <Tag color="orange">{userSummary.policiesLabel}</Tag>
+              <Tag color="red">{userSummary.endpointsLabel}</Tag>
+              <Tag color="cyan">{userSummary.actionsLabel}</Tag>
+              <Tag color="purple">{userSummary.pagesLabel}</Tag>
+            </Space>
+          )}
+
+          {viewType === 'page' && pageAccessData && pageSummary && (
+            <Space wrap>
+              <Tag color="purple">{pageSummary.pageLabel}</Tag>
+              <Tag color="cyan">{pageSummary.actionsLabel}</Tag>
+              <Tag color="red">{pageSummary.endpointsLabel}</Tag>
+            </Space>
+          )}
 
           <Alert
             message="Interactive Top-Down Visualization"

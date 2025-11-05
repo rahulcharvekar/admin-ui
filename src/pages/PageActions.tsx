@@ -31,7 +31,6 @@ interface PageActionForm {
   icon?: string;
   variant?: string;
   displayOrder?: number;
-  endpointId?: number;
   isActive?: boolean;
 }
 
@@ -64,15 +63,6 @@ export const PageActions = () => {
       const response = await api.uiPages.getAll();
       // Backend returns { pages: [...], tree: [...] }
       return response.data.pages || [];
-    },
-  });
-
-  // Fetch endpoints for dropdown
-  const { data: endpoints = [] } = useQuery({
-    queryKey: ['endpoints'],
-    queryFn: async () => {
-      const response = await api.endpoints.getAll();
-      return response.data;
     },
   });
 
@@ -145,7 +135,6 @@ export const PageActions = () => {
       icon: action.icon,
       variant: action.variant,
       displayOrder: action.displayOrder,
-      endpointId: action.endpointId,
       isActive: action.isActive !== false, // Default to true
     });
     setIsEditModalOpen(true);
@@ -189,21 +178,16 @@ export const PageActions = () => {
       width: 120,
     },
     {
-      title: 'Page ID',
-      dataIndex: 'pageId',
-      key: 'pageId',
-      width: 100,
+      title: 'Page',
+      key: 'page',
+      width: 150,
+      render: (_: any, record: any) => record.page ? `${record.page.label} (${record.page.route})` : '-',
     },
     {
       title: 'Endpoint',
-      dataIndex: 'endpointId',
-      key: 'endpointId',
-      width: 150,
-      render: (id, record: any) => {
-        if (!id) return '-';
-        const endpoint = record.endpoint;
-        return endpoint ? `${endpoint.method} ${endpoint.path}` : `ID: ${id}`;
-      },
+      key: 'endpoint',
+      width: 200,
+      render: (_: any, record: any) => record.endpoint ? record.endpoint.path : '-',
     },
     {
       title: 'Order',
@@ -328,8 +312,9 @@ export const PageActions = () => {
               showSearch
               placeholder="Select page"
               optionFilterProp="children"
-              filterOption={(input, option: any) =>
-                option?.children?.toLowerCase().includes(input.toLowerCase())
+              filterOption={(input, option) =>
+                typeof option?.children === 'string' &&
+                (option.children as string).toLowerCase().includes(input.toLowerCase())
               }
             >
               {uiPages.map((page: any) => (
@@ -340,30 +325,12 @@ export const PageActions = () => {
             </Select>
           </Form.Item>
 
-          <Form.Item name="endpointId" label="Associated Endpoint">
-            <Select
-              showSearch
-              placeholder="Select endpoint"
-              allowClear
-              optionFilterProp="children"
-              filterOption={(input, option: any) =>
-                option?.children?.toLowerCase().includes(input.toLowerCase())
-              }
-            >
-              {endpoints.map((endpoint: any) => (
-                <Select.Option key={endpoint.id} value={endpoint.id}>
-                  {endpoint.method} {endpoint.path}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-
           <Form.Item name="icon" label="Icon">
             <Input placeholder="e.g., PlusOutlined, EditOutlined" />
           </Form.Item>
 
           <Form.Item name="variant" label="Button Variant">
-            <Select placeholder="Select variant" defaultValue="default">
+            <Select placeholder="Select variant">
               <Select.Option value="default">Default</Select.Option>
               <Select.Option value="primary">Primary</Select.Option>
               <Select.Option value="secondary">Secondary</Select.Option>
@@ -438,30 +405,12 @@ export const PageActions = () => {
             </Select>
           </Form.Item>
 
-          <Form.Item name="endpointId" label="Associated Endpoint">
-            <Select
-              showSearch
-              placeholder="Select endpoint"
-              allowClear
-              optionFilterProp="children"
-              filterOption={(input, option: any) =>
-                option?.children?.toLowerCase().includes(input.toLowerCase())
-              }
-            >
-              {endpoints.map((endpoint: any) => (
-                <Select.Option key={endpoint.id} value={endpoint.id}>
-                  {endpoint.method} {endpoint.path}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-
           <Form.Item name="icon" label="Icon">
             <Input placeholder="e.g., PlusOutlined, EditOutlined" />
           </Form.Item>
 
           <Form.Item name="variant" label="Button Variant">
-            <Select placeholder="Select variant" defaultValue="default">
+            <Select placeholder="Select variant">
               <Select.Option value="default">Default</Select.Option>
               <Select.Option value="primary">Primary</Select.Option>
               <Select.Option value="secondary">Secondary</Select.Option>

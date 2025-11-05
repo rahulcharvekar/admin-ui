@@ -272,6 +272,10 @@ export const PageActionEndpointAssignment = () => {
           allowClear
           showSearch
           optionFilterProp="label"
+          filterOption={(input, option) =>
+            typeof option?.label === 'string' &&
+            option.label.toLowerCase().includes(input.toLowerCase())
+          }
           options={[
             ...endpoints.map((endpoint) => ({
               value: endpoint.id,
@@ -346,6 +350,10 @@ export const PageActionEndpointAssignment = () => {
                 }))}
                 showSearch
                 optionFilterProp="label"
+                filterOption={(input, option) =>
+                  typeof option?.label === 'string' &&
+                  option.label.toLowerCase().includes(input.toLowerCase())
+                }
                 allowClear
                 onClear={() => {
                   setSelectedPageId(null);

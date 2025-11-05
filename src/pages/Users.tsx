@@ -7,8 +7,9 @@ import {
   Modal,
   Form,
   message,
-  Popconfirm,
   Typography,
+  App,
+  Switch,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -24,6 +25,7 @@ import type { User, CreateUserRequest, UpdateUserRequest } from '../types';
 const { Title } = Typography;
 
 export const Users = () => {
+  const { modal } = App.useApp();
   const [searchText, setSearchText] = useState('');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -74,31 +76,38 @@ export const Users = () => {
     },
   });
 
-  // Delete user mutation
-  const deleteUserMutation = useMutation({
-    mutationFn: (userId: number) => api.users.delete(userId),
+  // Toggle user status mutation
+  const toggleStatusMutation = useMutation({
+    mutationFn: ({ userId, enabled }: { userId: number; enabled: boolean }) => 
+      api.users.updateStatus(userId, enabled),
     onSuccess: () => {
-      message.success('User deleted successfully');
+      message.success('User status updated successfully');
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (error: any) => {
-      message.error(error.response?.data?.error || 'Failed to delete user');
+      message.error(error.response?.data?.error || 'Failed to update user status');
     },
   });
 
-  // Filter users based on search
-  const filteredUsers = users.filter(
-    (user) =>
-      user.username.toLowerCase().includes(searchText.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchText.toLowerCase()) ||
-      user.fullName.toLowerCase().includes(searchText.toLowerCase())
-  );
+  // Filter users based on search and sort by ID
+  const filteredUsers = users
+    .filter(
+      (user) =>
+        user.username.toLowerCase().includes(searchText.toLowerCase()) ||
+        user.email.toLowerCase().includes(searchText.toLowerCase()) ||
+        user.fullName.toLowerCase().includes(searchText.toLowerCase())
+    )
+    .sort((a, b) => a.id - b.id); // Sort by ID in ascending order
 
   // Handle create user
   const handleCreateUser = async () => {
     try {
       const values = await createForm.validateFields();
-      createUserMutation.mutate(values);
+      const userData: CreateUserRequest = {
+        ...values,
+        isActive: true, // New users are enabled by default
+      };
+      createUserMutation.mutate(userData);
     } catch (error) {
       console.error('Validation failed:', error);
     }
@@ -130,6 +139,7 @@ export const Users = () => {
         if (values.password) updates.password = values.password;
         if (values.boardId !== selectedUser.boardId) updates.boardId = values.boardId;
         if (values.employerId !== selectedUser.employerId) updates.employerId = values.employerId;
+        // Status is managed via the toggle switch in the table, not in the edit form
 
         // Update user details
         updateUserMutation.mutate({ userId: selectedUser.id, userData: updates });
@@ -139,49 +149,81 @@ export const Users = () => {
     }
   };
 
-  // Handle delete user
-  const handleDeleteUser = (userId: number) => {
-    deleteUserMutation.mutate(userId);
+  // Handle toggle user status
+  const handleToggleStatus = (userId: number, currentStatus: boolean) => {
+    const newStatus = !currentStatus;
+    const action = newStatus ? 'enable' : 'disable';
+    
+    modal.confirm({
+      title: `${action.charAt(0).toUpperCase() + action.slice(1)} User`,
+      content: `Are you sure you want to ${action} this user?`,
+      okText: 'Yes',
+      cancelText: 'No',
+      onOk: () => {
+        toggleStatusMutation.mutate({ userId, enabled: newStatus });
+      },
+    });
   };
 
   // Table columns
   const columns: ColumnsType<User> = [
-    {
-      title: 'ID',
-      dataIndex: 'id',
-      key: 'id',
-      width: 70,
-    },
-    {
-      title: 'Username',
-      dataIndex: 'username',
-      key: 'username',
-      render: (text) => <strong>{text}</strong>,
-    },
-    {
-      title: 'Full Name',
-      dataIndex: 'fullName',
-      key: 'fullName',
-    },
-    {
-      title: 'Email',
-      dataIndex: 'email',
-      key: 'email',
-    },
-    {
-      title: 'Roles',
-      dataIndex: 'roles',
-      key: 'roles',
-      render: (roles: any[]) => (
-        roles && roles.length > 0 ? roles.map(r => r.name).join(', ') : '-'
-      ),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 150,
-      render: (_, record) => (
-        <Space size="small">
+      {
+        title: 'ID',
+        dataIndex: 'id',
+        key: 'id',
+        width: 70,
+        sorter: (a: User, b: User) => a.id - b.id,
+        defaultSortOrder: 'ascend',
+      },
+      {
+        title: 'Username',
+        dataIndex: 'username',
+        key: 'username',
+        render: (text: string) => <strong>{text}</strong>,
+      },
+      {
+        title: 'Email',
+        dataIndex: 'email',
+        key: 'email',
+      },
+      {
+        title: 'Status',
+        dataIndex: 'isActive',
+        key: 'status',
+        width: 130,
+        render: (isActive: boolean, record: User) => (
+          <Switch
+            checked={isActive}
+            onChange={() => handleToggleStatus(record.id, isActive)}
+            checkedChildren="Enabled"
+            unCheckedChildren="Disabled"
+            style={{
+              borderRadius: '4px',
+              width: '95px',
+            }}
+            className="square-switch"
+          />
+        ),
+      },
+      {
+        title: 'Board ID',
+        dataIndex: 'boardId',
+        key: 'boardId',
+        width: 100,
+        render: (boardId: string | null) => boardId || '-',
+      },
+      {
+        title: 'Employer ID',
+        dataIndex: 'employerId',
+        key: 'employerId',
+        width: 120,
+        render: (employerId: string | null) => employerId || '-',
+      },
+      {
+        title: 'Actions',
+        key: 'actions',
+        width: 100,
+        render: (_: any, record: User) => (
           <Button
             type="link"
             icon={<EditOutlined />}
@@ -190,72 +232,51 @@ export const Users = () => {
           >
             Edit
           </Button>
-          <Popconfirm
-            title="Delete this user?"
-            onConfirm={() => handleDeleteUser(record.id)}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Button type="link" danger size="small">
-              Delete
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
+        ),
+      },
+    ];
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Title level={3} style={{ margin: 0 }}>Users Management</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateModalOpen(true)}>
-          Create User
+      <Title level={3}>Users</Title>
+      <Space style={{ marginBottom: 16 }}>
+        <Input
+          placeholder="Search by username, email, or full name"
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          style={{ width: 300 }}
+          prefix={<SearchOutlined />}
+        />
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => setIsCreateModalOpen(true)}
+        >
+          Add User
         </Button>
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-        <Space>
-          <Input
-            placeholder="Search users..."
-            prefix={<SearchOutlined />}
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 300 }}
-            allowClear
-          />
-          <Button icon={<ReloadOutlined />} onClick={() => refetch()}>
-            Refresh
-          </Button>
-        </Space>
-      </div>
+        <Button icon={<ReloadOutlined />} onClick={() => refetch()}>
+          Refresh
+        </Button>
+      </Space>
 
       <Table
         columns={columns}
         dataSource={filteredUsers}
-        rowKey="id"
         loading={isLoading}
-        pagination={{
-          pageSize: 50,
-          showSizeChanger: true,
-          pageSizeOptions: ['10', '20', '50', '100', '200'],
-          showTotal: (total) => `Total: ${total} users`,
-        }}
-        size="small"
+        rowKey="id"
+        pagination={{ pageSize: 10 }}
+        scroll={{ x: true }}
       />
 
       {/* Create User Modal */}
       <Modal
-        title="Create User"
+        title="Add User"
         open={isCreateModalOpen}
+        onCancel={() => setIsCreateModalOpen(false)}
         onOk={handleCreateUser}
-        onCancel={() => {
-          setIsCreateModalOpen(false);
-          createForm.resetFields();
-        }}
-        confirmLoading={createUserMutation.isPending}
+        okText="Create"
       >
-        <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={createForm} layout="vertical">
           <Form.Item
             name="username"
             label="Username"
@@ -291,17 +312,11 @@ export const Users = () => {
             <Input.Password />
           </Form.Item>
 
-          <Form.Item
-            name="boardId"
-            label="Board ID"
-          >
+          <Form.Item name="boardId" label="Board ID">
             <Input placeholder="Optional" />
           </Form.Item>
 
-          <Form.Item
-            name="employerId"
-            label="Employer ID"
-          >
+          <Form.Item name="employerId" label="Employer ID">
             <Input placeholder="Optional" />
           </Form.Item>
         </Form>
@@ -311,15 +326,11 @@ export const Users = () => {
       <Modal
         title="Edit User"
         open={isEditModalOpen}
+        onCancel={() => setIsEditModalOpen(false)}
         onOk={handleUpdateUser}
-        onCancel={() => {
-          setIsEditModalOpen(false);
-          setSelectedUser(null);
-          editForm.resetFields();
-        }}
-        confirmLoading={updateUserMutation.isPending}
+        okText="Update"
       >
-        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={editForm} layout="vertical">
           <Form.Item
             name="username"
             label="Username"
@@ -347,24 +358,15 @@ export const Users = () => {
             <Input />
           </Form.Item>
 
-          <Form.Item
-            name="password"
-            label="New Password (optional)"
-          >
+          <Form.Item name="password" label="New Password (optional)">
             <Input.Password placeholder="Leave empty to keep current" />
           </Form.Item>
 
-          <Form.Item
-            name="boardId"
-            label="Board ID"
-          >
+          <Form.Item name="boardId" label="Board ID">
             <Input placeholder="Optional" />
           </Form.Item>
 
-          <Form.Item
-            name="employerId"
-            label="Employer ID"
-          >
+          <Form.Item name="employerId" label="Employer ID">
             <Input placeholder="Optional" />
           </Form.Item>
         </Form>

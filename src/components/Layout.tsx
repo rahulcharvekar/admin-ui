@@ -120,15 +120,9 @@ export const Layout = () => {
       label: 'UI',
       children: [
         {
-          key: '/page-actions',
-          icon: <AppstoreOutlined />,
-          label: 'Page Actions',
-          onClick: () => navigate('/page-actions'),
-        },
-        {
           key: '/pages',
           icon: <FileTextOutlined />,
-          label: 'UI Pages',
+          label: 'Pages & Actions',
           onClick: () => navigate('/pages'),
         },
       ],
@@ -139,22 +133,10 @@ export const Layout = () => {
       label: 'Linkage',
       children: [
         {
-          key: '/page-actions/endpoints',
-          icon: <AppstoreOutlined />,
-          label: 'Page Actions → Endpoints',
-          onClick: () => navigate('/page-actions/endpoints'),
-        },
-        {
           key: '/policies/endpoints',
           icon: <LockOutlined />,
           label: 'Policies → Endpoints',
           onClick: () => navigate('/policies/endpoints'),
-        },
-        {
-          key: '/pages/actions',
-          icon: <FileTextOutlined />,
-          label: 'Pages → Actions',
-          onClick: () => navigate('/pages/actions'),
         },
         {
           key: '/roles/policies',
