@@ -24,6 +24,8 @@ import { SaveOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../services/api';
 import type { User, Role } from '../../types';
+import { useQueryError } from '../../hooks/useQueryError';
+import { AccessDenied } from '../../components/AccessDenied';
 
 const { Title, Text } = Typography;
 
@@ -34,7 +36,7 @@ export const UserRoleRelationship = () => {
   const queryClient = useQueryClient();
 
   // Fetch all users
-  const { data: users = [], isLoading: usersLoading } = useQuery({
+  const { data: users = [], isLoading: usersLoading, isError: usersError, error: usersErrorObj } = useQuery({
     queryKey: ['users'],
     queryFn: async () => {
       const response = await api.users.getAll();
@@ -43,7 +45,7 @@ export const UserRoleRelationship = () => {
   });
 
   // Fetch all roles
-  const { data: roles = [], isLoading: rolesLoading } = useQuery({
+  const { data: roles = [], isLoading: rolesLoading, isError: rolesError, error: rolesErrorObj } = useQuery({
     queryKey: ['roles'],
     queryFn: async () => {
       const response = await api.roles.getAll();
@@ -52,7 +54,7 @@ export const UserRoleRelationship = () => {
   });
 
   // Fetch roles for selected user (assigned roles)
-  const { data: userRolesData } = useQuery({
+  const { data: userRolesData, isError: userRolesError, error: userRolesErrorObj } = useQuery({
     queryKey: ['user-roles', selectedUserId],
     queryFn: async () => {
       if (!selectedUserId) return null;
@@ -64,6 +66,16 @@ export const UserRoleRelationship = () => {
     },
     enabled: !!selectedUserId,
   });
+
+  // Check for access denied errors
+  const usersAccessCheck = useQueryError({ isError: usersError, error: usersErrorObj });
+  const rolesAccessCheck = useQueryError({ isError: rolesError, error: rolesErrorObj });
+  const userRolesAccessCheck = useQueryError({ isError: userRolesError, error: userRolesErrorObj });
+
+  // If any query returns 403, show access denied
+  if (usersAccessCheck.isAccessDenied || rolesAccessCheck.isAccessDenied || userRolesAccessCheck.isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   const userRoles = userRolesData || [];
 

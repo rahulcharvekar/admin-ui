@@ -20,6 +20,8 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import type { Role } from '../types';
+import { useQueryError } from '../hooks/useQueryError';
+import { AccessDenied } from '../components/AccessDenied';
 
 const { Title } = Typography;
 
@@ -42,6 +44,8 @@ export const Roles = () => {
     data: roles = [],
     isLoading,
     refetch,
+    isError,
+    error,
   } = useQuery({
     queryKey: ['roles'],
     queryFn: async () => {
@@ -49,6 +53,13 @@ export const Roles = () => {
       return response.data as Role[];
     },
   });
+
+  // Check for access denied
+  const { isAccessDenied } = useQueryError({ isError, error });
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   // Create role mutation
   const createRoleMutation = useMutation({

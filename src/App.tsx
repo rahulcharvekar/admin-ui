@@ -17,17 +17,21 @@ import { PageActionAssignment } from './pages/relationships/PageActionAssignment
 import { PageActionEndpointAssignment } from './pages/relationships/PageActionEndpointAssignment';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { setQueryClient } from './services/api';
 
 // Create a query client for React Query
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: false,
-      retry: 1,
-      staleTime: 5 * 60 * 1000, // 5 minutes
+  refetchOnWindowFocus: true,
+  retry: false,
+  staleTime: 0,
     },
   },
 });
+
+// Set the queryClient in the api module for access in interceptors
+setQueryClient(queryClient);
 
 function App() {
   return (

@@ -23,6 +23,8 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import type { Policy } from '../types';
+import { useQueryError } from '../hooks/useQueryError';
+import { AccessDenied } from '../components/AccessDenied';
 
 const { Title } = Typography;
 const { TextArea } = Input;
@@ -50,6 +52,8 @@ export const Policies = () => {
     data: policies = [],
     isLoading,
     refetch,
+    isError,
+    error,
   } = useQuery({
     queryKey: ['policies'],
     queryFn: async () => {
@@ -57,6 +61,13 @@ export const Policies = () => {
       return response.data as Policy[];
     },
   });
+
+  // Check for access denied
+  const { isAccessDenied } = useQueryError({ isError, error });
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   // Create policy mutation
   const createPolicyMutation = useMutation({
@@ -127,7 +138,25 @@ export const Policies = () => {
           return;
         }
       }
-      createPolicyMutation.mutate(values);
+        // Transform payload to match API expectation
+        const payload = {
+          name: values.name,
+          description: values.description,
+          type: values.type,
+          expression: values.conditions || '',
+          isActive: values.isActive ?? true
+        };
+        console.log('[Create Policy] Payload:', payload);
+        createPolicyMutation.mutate(payload, {
+          onSettled: (data, error, variables, context) => {
+            console.log('[Create Policy] Request:', {
+              payload: variables,
+              response: data,
+              error,
+              context
+            });
+          }
+        });
     } catch (error) {
       console.error('Validation failed:', error);
     }

@@ -1,0 +1,1440 @@
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { Card, Select, Spin, Alert, Typography, Space, Button, Tag } from 'antd';
+import ReactFlow, {
+  Controls,
+  Background,
+  useNodesState,
+  useEdgesState,
+  MarkerType,
+  Position,
+} from 'reactflow';
+import type { Node, Edge } from 'reactflow';
+import 'reactflow/dist/style.css';
+import { api } from '../services/api';
+
+const { Title } = Typography;
+const { Option } = Select;
+
+const formatCountLabel = (count: number, singular: string, plural?: string) => {
+  if (count === 0) return '';
+  const label = count === 1 ? singular : plural ?? `${singular}s`;
+  return `${count} ${label}`;
+};
+
+const summaryCountLabel = (count: number, singular: string, plural?: string) => {
+  const formatted = formatCountLabel(count, singular, plural);
+  if (formatted) return formatted;
+  if (plural) return `0 ${plural}`;
+  if (singular.endsWith('y')) return `0 ${singular.slice(0, -1)}ies`;
+  if (/[sxz]$/.test(singular) || /(?:sh|ch)$/.test(singular)) return `0 ${singular}es`;
+  return `0 ${singular}s`;
+};
+
+interface UserData {
+  id: number;
+  username: string;
+  fullName: string;
+  email?: string;
+}
+
+interface PageActionEndpoint {
+  service?: string;
+  version?: string;
+  method?: string;
+  path?: string;
+}
+
+interface PageAction {
+  label: string;
+  action: string;
+  endpoint?: string;
+  endpoint_details?: PageActionEndpoint;
+}
+
+interface PageNode {
+  id: number;
+  key: string;
+  label: string;
+  route: string;
+  is_requested?: boolean;
+  actions?: PageAction[];
+  children?: PageNode[];
+}
+
+interface UiAccessMatrixResponse {
+  generated_at: string;
+  version: number;
+  pages: RawPageNode[];
+}
+
+interface RawPageSummary {
+  id?: number;
+  key?: string;
+  label?: string;
+  route?: string;
+}
+
+interface RawEndpointInfo {
+  service?: string;
+  version?: string;
+  method?: string;
+  path?: string;
+}
+
+interface RawPageAction {
+  label?: string;
+  action?: string;
+  endpoint?: string | RawEndpointInfo | null;
+  endpoint_details?: RawEndpointInfo | null;
+}
+
+interface RawPageNode {
+  id?: number;
+  page_id?: number;
+  generated_at?: string;
+  version?: number;
+  key?: string;
+  label?: string;
+  route?: string;
+  page?: RawPageSummary | null;
+  is_requested?: boolean;
+  actions?: RawPageAction[] | null;
+  children?: RawPageNode[] | null;
+  page_children?: RawPageNode[] | null;
+}
+
+const mergeEndpointInfo = (primary?: RawEndpointInfo | null, secondary?: RawEndpointInfo | null): PageActionEndpoint | undefined => {
+  const combined = {
+    service: primary?.service ?? secondary?.service,
+    version: primary?.version ?? secondary?.version,
+    method: primary?.method ?? secondary?.method,
+    path: primary?.path ?? secondary?.path,
+  };
+
+  const hasValue = Object.values(combined).some((value) => typeof value === 'string' && value.length > 0);
+  return hasValue ? combined : undefined;
+};
+
+const normalizePageAction = (rawAction: RawPageAction): PageAction => {
+  const endpointDetails = mergeEndpointInfo(
+    typeof rawAction.endpoint === 'object' && rawAction.endpoint !== null && !Array.isArray(rawAction.endpoint) ? rawAction.endpoint : null,
+    rawAction.endpoint_details
+  );
+
+  const endpointString = typeof rawAction.endpoint === 'string'
+    ? rawAction.endpoint
+    : endpointDetails
+      ? [endpointDetails.method, endpointDetails.path].filter(Boolean).join(' ')
+      : undefined;
+
+  return {
+    label: rawAction.label ?? '',
+    action: rawAction.action ?? '',
+    endpoint: endpointString,
+    endpoint_details: endpointDetails,
+  };
+};
+
+const normalizePageNode = (rawNode: RawPageNode): PageNode => {
+  const pageInfo = rawNode.page ?? null;
+  const nodeId = pageInfo?.id ?? rawNode.id ?? rawNode.page_id ?? 0;
+  const nodeKey = pageInfo?.key ?? rawNode.key ?? `${nodeId}`;
+  const nodeLabel = pageInfo?.label ?? rawNode.label ?? nodeKey;
+  const nodeRoute = pageInfo?.route ?? rawNode.route ?? '';
+
+  const rawChildren = rawNode.children ?? rawNode.page_children ?? [];
+  const normalizedChildren = Array.isArray(rawChildren) ? rawChildren.map(normalizePageNode) : [];
+
+  const rawActions = rawNode.actions ?? [];
+  const normalizedActions = Array.isArray(rawActions) ? rawActions.map(normalizePageAction) : [];
+
+  return {
+    id: nodeId,
+    key: nodeKey,
+    label: nodeLabel,
+    route: nodeRoute,
+    is_requested: rawNode.is_requested,
+    actions: normalizedActions,
+    children: normalizedChildren,
+  };
+};
+
+const normalizePageNodes = (pages: RawPageNode[] | null | undefined): PageNode[] => {
+  if (!Array.isArray(pages)) return [];
+  return pages.map(normalizePageNode);
+};
+
+const formatEndpointNodeLabel = (
+  endpointDetails?: PageActionEndpoint,
+  endpointString?: string
+): string => {
+  if (endpointDetails) {
+    const { method, path } = endpointDetails;
+    if (method && path) return `${method}\n${path}`;
+    if (method) return method;
+    if (path) return path;
+  }
+
+  if (endpointString) return endpointString;
+
+  return 'Endpoint';
+};
+
+interface UserAccessMatrixPageAction {
+  action: string;
+  label: string;
+  page?: {
+    key: string;
+    label: string;
+    route: string;
+  };
+}
+
+interface UserAccessMatrixEndpoint {
+  service: string;
+  version: string;
+  method: string;
+  path: string;
+  description?: string;
+  page_actions: UserAccessMatrixPageAction[];
+}
+
+interface UserAccessMatrixPolicy {
+  name: string;
+  description?: string;
+  endpoints: UserAccessMatrixEndpoint[];
+}
+
+interface UserAccessMatrixRole {
+  name: string;
+  description?: string;
+  policies: UserAccessMatrixPolicy[];
+}
+
+interface UserAccessMatrixResponse {
+  generated_at: string;
+  version: number;
+  filters: {
+    user_id: number;
+  };
+  roles: UserAccessMatrixRole[];
+}
+
+interface ProcessedUserAccessData {
+  id: number;
+  username: string;
+  fullName?: string;
+  email?: string;
+  roles: UserAccessMatrixRole[];
+}
+
+interface ProcessedPageAccessData {
+  pageId: number;
+  pageNode: PageNode;
+  allPages: PageNode[];
+}
+
+// Helper function to find a page node by ID in the hierarchy
+const findPageById = (pages: PageNode[], targetId: number): PageNode | null => {
+  for (const page of pages) {
+    if (page.id === targetId) return page;
+    if (page.children) {
+      const found = findPageById(page.children, targetId);
+      if (found) return found;
+    }
+  }
+  return null;
+};
+
+export const AccessVisualization = () => {
+
+  const [users, setUsers] = useState<UserData[]>([]);
+  const [uiPages, setUiPages] = useState<PageNode[]>([]); // All UI pages from access matrix
+  const [selectedUser, setSelectedUser] = useState<number | null>(null);
+  const [selectedPage, setSelectedPage] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [viewType, setViewType] = useState<'user' | 'page'>('user');
+  // State to track expanded nodes
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  // Store full data for rebuild on expand/collapse
+  const [userAccessData, setUserAccessData] = useState<ProcessedUserAccessData | null>(null);
+  const [pageAccessData, setPageAccessData] = useState<ProcessedPageAccessData | null>(null);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Toggle node expansion
+  const toggleNodeExpansion = useCallback((nodeId: string) => {
+    setExpandedNodes((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(nodeId)) {
+        newSet.delete(nodeId);
+      } else {
+        newSet.add(nodeId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const userSummary = useMemo(() => {
+    if (!userAccessData) return null;
+
+    const roles = userAccessData.roles || [];
+    let policiesCount = 0;
+    let endpointsCount = 0;
+    let actionsCount = 0;
+    const pageKeys = new Set<string>();
+
+    roles.forEach((role) => {
+      const policies = role.policies || [];
+      policiesCount += policies.length;
+
+      policies.forEach((policy) => {
+        const endpoints = policy.endpoints || [];
+        endpointsCount += endpoints.length;
+
+        endpoints.forEach((endpoint) => {
+          const actions = endpoint.page_actions || [];
+          actionsCount += actions.length;
+
+          actions.forEach((action) => {
+            if (action.page) {
+              const pageKey =
+                action.page.key ||
+                action.page.route ||
+                action.page.label ||
+                action.label ||
+                action.action ||
+                '';
+              if (pageKey) pageKeys.add(pageKey);
+            }
+          });
+        });
+      });
+    });
+
+    const userLabel = userAccessData.fullName
+      ? `${userAccessData.fullName} (${userAccessData.username})`
+      : userAccessData.username;
+
+    return {
+      userLabel,
+      rolesLabel: summaryCountLabel(roles.length, 'role'),
+      policiesLabel: summaryCountLabel(policiesCount, 'policy', 'policies'),
+      endpointsLabel: summaryCountLabel(endpointsCount, 'endpoint'),
+      actionsLabel: summaryCountLabel(actionsCount, 'action'),
+      pagesLabel: summaryCountLabel(pageKeys.size, 'page'),
+    };
+  }, [userAccessData]);
+
+  const pageSummary = useMemo(() => {
+    if (!pageAccessData) return null;
+
+    const countActions = (node: PageNode): number => {
+      let count = 0;
+      if (node.actions) count += node.actions.length;
+      if (node.children) {
+        node.children.forEach(child => {
+          count += countActions(child);
+        });
+      }
+      return count;
+    };
+
+    const countEndpoints = (node: PageNode): number => {
+      let count = 0;
+      if (node.actions) {
+        count += node.actions.filter(action => action.endpoint).length;
+      }
+      if (node.children) {
+        node.children.forEach(child => {
+          count += countEndpoints(child);
+        });
+      }
+      return count;
+    };
+
+    const countPages = (node: PageNode): number => {
+      let count = 1; // count current node
+      if (node.children) {
+        node.children.forEach(child => {
+          count += countPages(child);
+        });
+      }
+      return count;
+    };
+
+    const actionsCount = countActions(pageAccessData.pageNode);
+    const endpointsCount = countEndpoints(pageAccessData.pageNode);
+    const pagesCount = countPages(pageAccessData.pageNode);
+
+    const pageLabel = pageAccessData.pageNode.route
+      ? `${pageAccessData.pageNode.label} (${pageAccessData.pageNode.route})`
+      : pageAccessData.pageNode.label;
+
+    return {
+      pageLabel,
+      actionsLabel: summaryCountLabel(actionsCount, 'action'),
+      endpointsLabel: summaryCountLabel(endpointsCount, 'endpoint'),
+      pagesLabel: summaryCountLabel(pagesCount, 'page'),
+    };
+  }, [pageAccessData]);
+
+  // Fetch users and pages on mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const usersRes = await api.users.getAll();
+        
+        console.log('Users response:', usersRes.data);
+        
+        // Handle users response (assuming it's an array directly)
+        setUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
+      } catch (err: any) {
+        console.error('Failed to fetch users:', err);
+        setError(err.response?.data?.message || 'Failed to load users');
+        setUsers([]);
+      }
+    };
+    fetchData();
+  }, []);
+
+  // Fetch UI pages when page view is selected
+  useEffect(() => {
+    const fetchUiPages = async () => {
+      if (viewType !== 'page') return;
+      
+      try {
+        setLoading(true);
+        setError(null);
+        // Fetch all UI pages from access matrix
+        const matrixRes = await api.meta.getAllUiAccessMatrix();
+        const matrixData: UiAccessMatrixResponse = matrixRes.data;
+        
+        console.log('UI Pages response:', matrixData);
+
+        const normalizedPages = normalizePageNodes(matrixData.pages);
+
+        if (normalizedPages.length > 0) {
+          setUiPages(normalizedPages);
+          // Automatically build visualization with all pages
+          buildAllPagesVisualization(normalizedPages);
+        } else {
+          setUiPages([]);
+          setNodes([]);
+          setEdges([]);
+        }
+      } catch (err: any) {
+        console.error('Failed to fetch UI pages:', err);
+        setError(err.response?.data?.message || 'Failed to load UI pages');
+        setUiPages([]);
+        setNodes([]);
+        setEdges([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchUiPages();
+  }, [viewType]);
+
+  // Helper function to check if node matches search
+  const nodeMatchesSearch = useCallback((label: string, query: string) => {
+    if (!query) return false;
+    return label.toLowerCase().includes(query.toLowerCase());
+  }, []);
+
+  // Helper function to create clickable node with expand indicator and highlight if matches search
+  const createExpandableNode = useCallback((
+    id: string,
+    label: string,
+    position: { x: number; y: number },
+    style: any,
+    hasChildren: boolean,
+    isExpanded: boolean,
+    onNodeClick?: () => void,
+    highlight?: boolean
+  ): Node => {
+    const expandIndicator = hasChildren ? (isExpanded ? ' ▼' : ' ▶') : '';
+    return {
+      id,
+      data: { 
+        label: `${label}${expandIndicator}`,
+        onClick: onNodeClick 
+      },
+      position,
+      style: {
+        ...style,
+        cursor: hasChildren ? 'pointer' : 'default',
+        border: highlight
+          ? '3px solid #faad14'
+          : hasChildren
+            ? '2px solid rgba(0,0,0,0.15)'
+            : '1px solid rgba(0,0,0,0.1)',
+        boxShadow: highlight
+          ? '0 0 12px #faad14'
+          : '0 2px 4px rgba(0,0,0,0.1)',
+      },
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Top,
+    };
+  }, [nodeMatchesSearch]);
+
+  // Build user access visualization with expand/collapse
+  const buildUserAccessVisualization = useCallback((userData: ProcessedUserAccessData, expanded: Set<string>) => {
+    const newNodes: Node[] = [];
+    const newEdges: Edge[] = [];
+    const userId = userData.id;
+
+    const hasSearch = !!searchQuery;
+    const matchesString = (value: string | undefined | null): boolean => {
+      if (!hasSearch || !value) return false;
+      return nodeMatchesSearch(value, searchQuery);
+    };
+    const matchesStrings = (...values: Array<string | undefined | null>): boolean =>
+      values.some((value) => matchesString(value));
+    const matchesPage = (page?: { key?: string; label?: string; route?: string } | null): boolean =>
+      !!page && matchesStrings(page.label, page.route, page.key);
+    const matchesPageAction = (action?: UserAccessMatrixPageAction | null): boolean => {
+      if (!action) return false;
+      if (matchesStrings(action.label, action.action)) return true;
+      if (action.page && matchesPage(action.page)) return true;
+      return false;
+    };
+    const matchesEndpoint = (endpoint?: UserAccessMatrixEndpoint | null): boolean => {
+      if (!endpoint) return false;
+      if (matchesStrings(endpoint.service, endpoint.version, endpoint.method, endpoint.path, endpoint.description)) {
+        return true;
+      }
+      return (endpoint.page_actions || []).some((action) => matchesPageAction(action));
+    };
+    const matchesPolicy = (policy?: UserAccessMatrixPolicy | null): boolean => {
+      if (!policy) return false;
+      if (matchesStrings(policy.name, policy.description)) return true;
+      return (policy.endpoints || []).some((endpoint) => matchesEndpoint(endpoint));
+    };
+    const matchesRole = (role?: UserAccessMatrixRole | null): boolean => {
+      if (!role) return false;
+      if (matchesStrings(role.name, role.description)) return true;
+      return (role.policies || []).some((policy) => matchesPolicy(policy));
+    };
+    const matchesUser = (user?: ProcessedUserAccessData | null): boolean => {
+      if (!user) return false;
+      if (matchesStrings(user.username, user.fullName, user.email)) return true;
+      return (user.roles || []).some((role) => matchesRole(role));
+    };
+
+    // User node (root) - at the top center
+    const userNodeId = `user-${userId}`;
+    const roles = userData.roles || [];
+    const userDisplayName = userData.fullName
+      ? `${userData.fullName}\n(${userData.username})`
+      : userData.username;
+    const userHighlight = matchesUser(userData);
+
+    newNodes.push(
+      createExpandableNode(
+        userNodeId,
+        userDisplayName,
+        { x: 400, y: 50 },
+        {
+          background: '#e6f7ff',
+          color: '#003a8c',
+          padding: '12px 24px',
+          borderRadius: '8px',
+          fontWeight: 'bold',
+          fontSize: '14px',
+          textAlign: 'center',
+          whiteSpace: 'pre-wrap',
+        },
+        roles.length > 0,
+        true,
+        undefined,
+        userHighlight
+      )
+    );
+
+    // Roles nodes - horizontal row below user
+    const rolesCount = roles.length;
+    const roleSpacing = 250;
+    const roleStartX = 400 - ((rolesCount - 1) * roleSpacing) / 2;
+    
+    for (let i = 0; i < roles.length; i++) {
+      const role = roles[i];
+      const policies = role.policies || [];
+      const roleX = roleStartX + (i * roleSpacing);
+      const roleY = 200;
+      const roleNodeId = `role-${userId}-${i}`;
+      const isRoleExpanded = expanded.has(roleNodeId);
+      let roleEndpointTotal = 0;
+      let roleActionTotal = 0;
+      const rolePageKeys = new Set<string>();
+
+      policies.forEach((policy) => {
+        const endpoints = policy.endpoints || [];
+        roleEndpointTotal += endpoints.length;
+        endpoints.forEach((endpoint) => {
+          const actions = endpoint.page_actions || [];
+          roleActionTotal += actions.length;
+          actions.forEach((actionItem) => {
+            if (actionItem.page) {
+              const pageKey =
+                actionItem.page.key ||
+                actionItem.page.route ||
+                actionItem.page.label ||
+                actionItem.label ||
+                actionItem.action ||
+                '';
+              if (pageKey) rolePageKeys.add(pageKey);
+            }
+          });
+        });
+      });
+      const roleLabelParts: string[] = [];
+      const policyCountLabel = formatCountLabel(policies.length, 'policy');
+      if (policyCountLabel) roleLabelParts.push(policyCountLabel);
+      const endpointCountLabel = formatCountLabel(roleEndpointTotal, 'endpoint');
+      if (endpointCountLabel) roleLabelParts.push(endpointCountLabel);
+      const actionCountLabel = formatCountLabel(roleActionTotal, 'action');
+      if (actionCountLabel) roleLabelParts.push(actionCountLabel);
+      const pageCountLabel = formatCountLabel(rolePageKeys.size, 'page');
+      if (pageCountLabel) roleLabelParts.push(pageCountLabel);
+      const roleLabelDetails = roleLabelParts.length ? `\n(${roleLabelParts.join(', ')})` : '';
+      const roleHighlight = matchesRole(role);
+
+      newNodes.push(
+        createExpandableNode(
+          roleNodeId,
+          `${role.name}${roleLabelDetails}`,
+          { x: roleX, y: roleY },
+          {
+            background: '#f6ffed',
+            color: '#135200',
+            padding: '10px 16px',
+            borderRadius: '6px',
+            fontSize: '13px',
+            textAlign: 'center',
+            minWidth: '180px',
+          },
+          policies.length > 0,
+          isRoleExpanded,
+          () => toggleNodeExpansion(roleNodeId),
+          roleHighlight
+        )
+      );
+
+      newEdges.push({
+        id: `${userNodeId}-${roleNodeId}`,
+        source: userNodeId,
+        target: roleNodeId,
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed },
+        style: { stroke: '#52c41a', strokeWidth: 2 },
+      });
+
+      // Only show policies if role is expanded
+      if (isRoleExpanded) {
+        const policiesCount = policies.length;
+        const policySpacing = 200;
+        const policyStartX = roleX - ((policiesCount - 1) * policySpacing) / 2;
+        
+        for (let j = 0; j < policies.length; j++) {
+          const policy = policies[j];
+          const endpoints = policy.endpoints || [];
+          const policyX = policyStartX + (j * policySpacing);
+          const policyY = 380;
+          const policyNodeId = `policy-${userId}-${i}-${j}`;
+          const isPolicyExpanded = expanded.has(policyNodeId);
+          
+          // Calculate total actions and unique pages across all endpoints in this policy
+          let totalActions = 0;
+          const uniquePolicyPages = new Set<string>();
+          endpoints.forEach((endpoint) => {
+            const actions = endpoint.page_actions || [];
+            totalActions += actions.length;
+            actions.forEach((actionItem) => {
+              if (actionItem.page) {
+                const pageKey =
+                  actionItem.page.key || actionItem.page.route || actionItem.page.label || actionItem.action;
+                uniquePolicyPages.add(pageKey);
+              }
+            });
+          });
+          
+          const policyLabelParts: string[] = [];
+          const endpointCountLabel = formatCountLabel(endpoints.length, 'endpoint');
+          if (endpointCountLabel) policyLabelParts.push(endpointCountLabel);
+          const actionsCountLabel = formatCountLabel(totalActions, 'action');
+          if (actionsCountLabel) policyLabelParts.push(actionsCountLabel);
+          const pagesCountLabel = formatCountLabel(uniquePolicyPages.size, 'page');
+          if (pagesCountLabel) policyLabelParts.push(pagesCountLabel);
+          const policyLabelDetails = policyLabelParts.length ? `\n(${policyLabelParts.join(', ')})` : '';
+          const policyHighlight = matchesPolicy(policy);
+
+          newNodes.push(
+            createExpandableNode(
+              policyNodeId,
+              `${policy.name}${policyLabelDetails}`,
+              { x: policyX, y: policyY },
+              {
+                background: '#fff7e6',
+                color: '#ad6800',
+                padding: '8px 14px',
+                borderRadius: '5px',
+                fontSize: '12px',
+                textAlign: 'center',
+                minWidth: '160px',
+              },
+              endpoints.length > 0,
+              isPolicyExpanded,
+              () => toggleNodeExpansion(policyNodeId),
+              policyHighlight
+            )
+          );
+
+          newEdges.push({
+            id: `${roleNodeId}-${policyNodeId}`,
+            source: roleNodeId,
+            target: policyNodeId,
+            animated: true,
+            markerEnd: { type: MarkerType.ArrowClosed },
+            style: { stroke: '#faad14', strokeWidth: 2 },
+          });
+
+          // Only show endpoints if policy is expanded
+          if (isPolicyExpanded) {
+            const endpointsCount = endpoints.length;
+            const endpointSpacing = 180;
+            const endpointStartX = policyX - ((endpointsCount - 1) * endpointSpacing) / 2;
+            
+            for (let k = 0; k < endpoints.length; k++) {
+              const endpoint = endpoints[k];
+              const actions = endpoint.page_actions || [];
+              const endpointX = endpointStartX + (k * endpointSpacing);
+              const endpointY = 560;
+              const endpointNodeId = `endpoint-${userId}-${i}-${j}-${k}`;
+              const isEndpointExpanded = expanded.has(endpointNodeId);
+              const endpointLabelParts: string[] = [];
+              const actionsCountLabel = formatCountLabel(actions.length, 'action');
+              if (actionsCountLabel) endpointLabelParts.push(actionsCountLabel);
+              const uniquePageKeys = new Set<string>();
+              actions.forEach((actionItem) => {
+                if (actionItem.page) {
+                  const pageKey =
+                    actionItem.page.key || actionItem.page.route || actionItem.page.label || actionItem.action;
+                  uniquePageKeys.add(pageKey);
+                }
+              });
+              const pageCountLabel = formatCountLabel(uniquePageKeys.size, 'page');
+              if (pageCountLabel) endpointLabelParts.push(pageCountLabel);
+              const endpointLabelSuffix = endpointLabelParts.length ? `\n(${endpointLabelParts.join(', ')})` : '';
+              const endpointLabel = `${endpoint.method}\n${endpoint.path}${endpointLabelSuffix}`;
+              const endpointHighlight = matchesEndpoint(endpoint);
+
+              newNodes.push(
+                createExpandableNode(
+                  endpointNodeId,
+                  endpointLabel,
+                  { x: endpointX, y: endpointY },
+                  {
+                    background: '#fff1f0',
+                    color: '#a8071a',
+                    padding: '6px 12px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    textAlign: 'center',
+                    maxWidth: '160px',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    minWidth: '140px',
+                  },
+                  actions.length > 0,
+                  isEndpointExpanded,
+                  actions.length > 0 ? () => toggleNodeExpansion(endpointNodeId) : undefined,
+                  endpointHighlight
+                )
+              );
+
+              newEdges.push({
+                id: `${policyNodeId}-${endpointNodeId}`,
+                source: policyNodeId,
+                target: endpointNodeId,
+                markerEnd: { type: MarkerType.ArrowClosed },
+                style: { stroke: '#ff4d4f', strokeWidth: 1 },
+              });
+
+              // Only show page actions if endpoint is expanded
+              if (isEndpointExpanded && actions.length > 0) {
+                const actionsCount = actions.length;
+                const actionSpacing = 160;
+                const actionStartX = endpointX - ((actionsCount - 1) * actionSpacing) / 2;
+
+                for (let m = 0; m < actions.length; m++) {
+                  const action = actions[m];
+                  const actionX = actionStartX + (m * actionSpacing);
+                  const actionY = 740;
+                  const actionNodeId = `page-action-${userId}-${i}-${j}-${k}-${m}`;
+                  const actionLabelBase = action.label || action.action || 'Action';
+                  const actionPages = action.page ? [action.page] : [];
+                  const actionPageCountLabel = formatCountLabel(actionPages.length, 'page');
+                  const actionLabelSuffix = actionPageCountLabel ? `\n(${actionPageCountLabel})` : '';
+                  const actionLabel = `${actionLabelBase}${actionLabelSuffix}`;
+                  const actionHasChildren = actionPages.length > 0;
+                  const isActionExpanded = expanded.has(actionNodeId);
+                  const actionHighlight = matchesPageAction(action);
+
+                  newNodes.push(
+                    createExpandableNode(
+                      actionNodeId,
+                      actionLabel,
+                      { x: actionX, y: actionY },
+                      {
+                        background: '#e6fffb',
+                        color: '#006d75',
+                        padding: '6px 12px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        textAlign: 'center',
+                        maxWidth: '160px',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        minWidth: '140px',
+                      },
+                      actionHasChildren,
+                      isActionExpanded,
+                      actionHasChildren ? () => toggleNodeExpansion(actionNodeId) : undefined,
+                      actionHighlight
+                    )
+                  );
+
+                  newEdges.push({
+                    id: `${endpointNodeId}-${actionNodeId}`,
+                    source: endpointNodeId,
+                    target: actionNodeId,
+                    markerEnd: { type: MarkerType.ArrowClosed },
+                    style: { stroke: '#597ef7', strokeWidth: 1 },
+                  });
+
+                  if (isActionExpanded && actionPages.length > 0) {
+                    const pageSpacing = 140;
+                    const pageStartX = actionX - ((actionPages.length - 1) * pageSpacing) / 2;
+
+                    for (let n = 0; n < actionPages.length; n++) {
+                      const page = actionPages[n];
+                      const pageX = pageStartX + (n * pageSpacing);
+                      const pageY = 920;
+                      const pageNodeId = `user-page-${userId}-${i}-${j}-${k}-${m}-${n}`;
+                      const pageLabelBase = page.label || page.key || page.route || 'Page';
+                      const pageRoute = page.route ? `\n${page.route}` : '';
+                      const pageLabel = `${pageLabelBase}${pageRoute}`;
+                      const pageHighlight = matchesPage(page);
+
+                      newNodes.push(
+                        createExpandableNode(
+                          pageNodeId,
+                          pageLabel,
+                          { x: pageX, y: pageY },
+                          {
+                            background: '#f9f0ff',
+                            color: '#531dab',
+                            padding: '6px 12px',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            textAlign: 'center',
+                            maxWidth: '160px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            minWidth: '140px',
+                          },
+                          false,
+                          false,
+                          undefined,
+                          pageHighlight
+                        )
+                      );
+
+                      newEdges.push({
+                        id: `${actionNodeId}-${pageNodeId}`,
+                        source: actionNodeId,
+                        target: pageNodeId,
+                        markerEnd: { type: MarkerType.ArrowClosed },
+                        style: { stroke: '#722ed1', strokeWidth: 1 },
+                      });
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+    setNodes(newNodes);
+    setEdges(newEdges);
+  }, [createExpandableNode, toggleNodeExpansion, setNodes, setEdges, searchQuery, nodeMatchesSearch]);
+
+  // Build user access map (main entry point)
+  const buildUserAccessMap = useCallback(async (userId: number) => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Fetch user access matrix
+      const matrixRes = await api.meta.getUserAccessMatrix(userId);
+      const matrixData: UserAccessMatrixResponse = matrixRes.data;
+
+      // Check if we have role data
+      if (!matrixData.roles || matrixData.roles.length === 0) {
+        setError('No access data found for this user');
+        setNodes([]);
+        setEdges([]);
+        setUserAccessData(null);
+        setLoading(false);
+        return;
+      }
+
+      const selectedUserMeta = users.find((user) => user.id === userId);
+      const processedData: ProcessedUserAccessData = {
+        id: userId,
+        username: selectedUserMeta?.username || `User ${userId}`,
+        fullName: selectedUserMeta?.fullName,
+        roles: matrixData.roles,
+      };
+
+      setUserAccessData(processedData);
+      
+      // Initially all nodes are collapsed (empty set)
+      const initialExpanded = new Set<string>();
+      setExpandedNodes(initialExpanded);
+      
+      buildUserAccessVisualization(processedData, initialExpanded);
+    } catch (err: any) {
+      console.error('Failed to build user access map:', err);
+      setError(err.response?.data?.message || 'Failed to build access map');
+      setUserAccessData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [buildUserAccessVisualization, setNodes, setEdges, setUserAccessData, setExpandedNodes, users]);
+
+  // Build page access visualization with expand/collapse
+  const buildPageAccessVisualization = useCallback((pageData: ProcessedPageAccessData, expanded: Set<string>) => {
+    const newNodes: Node[] = [];
+    const newEdges: Edge[] = [];
+    const pageNode = pageData.pageNode;
+
+    // Track Y position across all levels using an object reference
+    const yTracker = { current: 50 };
+    const verticalSpacing = 200;
+    const horizontalSpacing = 250;
+
+    // Recursive function to render page hierarchy
+    const renderPageNode = (
+      node: PageNode,
+      parentNodeId: string | null,
+      level: number,
+      xOffset: number
+    ): void => {
+      const nodeId = `page-${node.id}`;
+      const isExpanded = expanded.has(nodeId);
+      const hasChildren = !!(node.children && node.children.length > 0) || !!(node.actions && node.actions.length > 0);
+      
+      // Position this node
+      const nodeX = xOffset;
+      const nodeY = yTracker.current;
+      yTracker.current += verticalSpacing; // Move Y down for next node
+
+      // Node label with route
+      const nodeLabel = node.route
+        ? `${node.label}\n${node.route}`
+        : node.label;
+
+      // Add indicator for requested page
+      const requestedIndicator = node.is_requested ? ' 🎯' : '';
+
+      // Create page node
+      newNodes.push(
+        createExpandableNode(
+          nodeId,
+          `${nodeLabel}${requestedIndicator}`,
+          { x: nodeX, y: nodeY },
+          {
+            background: node.is_requested ? '#fff7e6' : '#f9f0ff',
+            color: node.is_requested ? '#ad6800' : '#531dab',
+            padding: '12px 24px',
+            borderRadius: '8px',
+            fontWeight: node.is_requested ? 'bold' : 'normal',
+            fontSize: '14px',
+            textAlign: 'center',
+            whiteSpace: 'pre-wrap',
+            minWidth: '180px',
+          },
+          hasChildren,
+          isExpanded,
+          hasChildren ? () => toggleNodeExpansion(nodeId) : undefined
+        )
+      );
+
+      // Add edge from parent if exists
+      if (parentNodeId) {
+        newEdges.push({
+          id: `${parentNodeId}-${nodeId}`,
+          source: parentNodeId,
+          target: nodeId,
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed },
+          style: { stroke: '#722ed1', strokeWidth: 2 },
+        });
+      }
+
+      // If expanded, show actions and children
+      if (isExpanded) {
+        // Render actions first if they exist
+        if (node.actions && node.actions.length > 0) {
+          const actions = node.actions;
+
+          for (let i = 0; i < actions.length; i++) {
+            const action = actions[i];
+            const actionNodeId = `action-${node.id}-${i}`;
+            const isActionExpanded = expanded.has(actionNodeId);
+            const actionX = nodeX + horizontalSpacing;
+            const actionY = yTracker.current;
+            yTracker.current += verticalSpacing;
+
+            const actionLabel = `${action.label}\n(${action.action})`;
+            const hasEndpoint = !!(action.endpoint_details || action.endpoint);
+
+            newNodes.push(
+              createExpandableNode(
+                actionNodeId,
+                actionLabel,
+                { x: actionX, y: actionY },
+                {
+                  background: '#e6fffb',
+                  color: '#006d75',
+                  padding: '10px 16px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  textAlign: 'center',
+                  minWidth: '160px',
+                  whiteSpace: 'pre-wrap',
+                },
+                hasEndpoint,
+                isActionExpanded,
+                hasEndpoint ? () => toggleNodeExpansion(actionNodeId) : undefined
+              )
+            );
+
+            newEdges.push({
+              id: `${nodeId}-${actionNodeId}`,
+              source: nodeId,
+              target: actionNodeId,
+              animated: true,
+              markerEnd: { type: MarkerType.ArrowClosed },
+              style: { stroke: '#13c2c2', strokeWidth: 2 },
+            });
+
+            // Show endpoint if action is expanded
+            if (isActionExpanded && action.endpoint_details) {
+              const endpointNodeId = `endpoint-${node.id}-${i}`;
+              const endpointX = actionX + horizontalSpacing;
+              const endpointY = yTracker.current;
+              yTracker.current += verticalSpacing;
+              const endpointLabel = formatEndpointNodeLabel(action.endpoint_details, action.endpoint);
+
+              newNodes.push(
+                createExpandableNode(
+                  endpointNodeId,
+                  endpointLabel,
+                  { x: endpointX, y: endpointY },
+                  {
+                    background: '#fff1f0',
+                    color: '#a8071a',
+                    padding: '8px 14px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    textAlign: 'center',
+                    maxWidth: '200px',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    minWidth: '140px',
+                  },
+                  false,
+                  false,
+                  undefined
+                )
+              );
+
+              newEdges.push({
+                id: `${actionNodeId}-${endpointNodeId}`,
+                source: actionNodeId,
+                target: endpointNodeId,
+                markerEnd: { type: MarkerType.ArrowClosed },
+                style: { stroke: '#ff4d4f', strokeWidth: 1 },
+              });
+            }
+          }
+        }
+
+        // Render children pages
+        if (node.children && node.children.length > 0) {
+          node.children.forEach((child) => {
+            renderPageNode(child, nodeId, level + 1, nodeX);
+          });
+        }
+      }
+    };
+
+    // Start rendering from root
+    renderPageNode(pageNode, null, 0, 100);
+
+    setNodes(newNodes);
+    setEdges(newEdges);
+  }, [createExpandableNode, toggleNodeExpansion, setNodes, setEdges]);
+
+  // Build visualization for all pages in the hierarchy, highlighting matches
+  const buildAllPagesVisualization = useCallback((allPages: PageNode[]) => {
+    const newNodes: Node[] = [];
+    const newEdges: Edge[] = [];
+    const yTracker = { current: 50 };
+    const verticalSpacing = 200;
+    const horizontalSpacing = 250;
+
+    // Helper to check if any child matches search
+    const subtreeMatchesSearch = (node: PageNode, query: string): boolean => {
+      if (nodeMatchesSearch(node.label, query) || (node.route && nodeMatchesSearch(node.route, query))) return true;
+      if (node.actions && node.actions.some(a => nodeMatchesSearch(a.label, query) || nodeMatchesSearch(a.action, query) || (a.endpoint && nodeMatchesSearch(a.endpoint, query)))) return true;
+      if (node.children && node.children.some(child => subtreeMatchesSearch(child, query))) return true;
+      return false;
+    };
+
+    // Recursive function to render page hierarchy
+    const renderPageNode = (
+      node: PageNode,
+      parentNodeId: string | null,
+      level: number,
+      xOffset: number
+    ): void => {
+      const nodeId = `page-${node.id}`;
+      const isExpanded = expandedNodes.has(nodeId);
+      const hasChildren = !!(node.children && node.children.length > 0) || !!(node.actions && node.actions.length > 0);
+      const nodeX = xOffset;
+      const nodeY = yTracker.current;
+      yTracker.current += verticalSpacing;
+      const nodeLabel = node.route ? `${node.label}\n${node.route}` : node.label;
+  // Highlight if matches search
+  const highlight = !!searchQuery && subtreeMatchesSearch(node, searchQuery);
+      newNodes.push(
+        createExpandableNode(
+          nodeId,
+          nodeLabel,
+          { x: nodeX, y: nodeY },
+          {
+            background: '#f9f0ff',
+            color: '#531dab',
+            padding: '12px 24px',
+            borderRadius: '8px',
+            fontWeight: 'normal',
+            fontSize: '14px',
+            textAlign: 'center',
+            whiteSpace: 'pre-wrap',
+            minWidth: '180px',
+          },
+          hasChildren,
+          isExpanded,
+          hasChildren ? () => toggleNodeExpansion(nodeId) : undefined,
+          highlight
+        )
+      );
+      if (parentNodeId) {
+        newEdges.push({
+          id: `${parentNodeId}-${nodeId}`,
+          source: parentNodeId,
+          target: nodeId,
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed },
+          style: { stroke: '#722ed1', strokeWidth: 2 },
+        });
+      }
+      if (isExpanded) {
+        // Render actions first if they exist
+        if (node.actions && node.actions.length > 0) {
+          const actions = node.actions;
+          for (let i = 0; i < actions.length; i++) {
+            const action = actions[i];
+            const actionNodeId = `action-${node.id}-${i}`;
+            const isActionExpanded = expandedNodes.has(actionNodeId);
+            const actionX = nodeX + horizontalSpacing;
+            const actionY = yTracker.current;
+            yTracker.current += verticalSpacing;
+            const actionLabel = `${action.label}\n(${action.action})`;
+            const hasEndpoint = !!(action.endpoint_details || action.endpoint);
+            // Highlight if matches search
+            const actionHighlight = !!searchQuery && (nodeMatchesSearch(action.label, searchQuery) || nodeMatchesSearch(action.action, searchQuery));
+            newNodes.push(
+              createExpandableNode(
+                actionNodeId,
+                actionLabel,
+                { x: actionX, y: actionY },
+                {
+                  background: '#e6fffb',
+                  color: '#006d75',
+                  padding: '10px 16px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  textAlign: 'center',
+                  minWidth: '160px',
+                  whiteSpace: 'pre-wrap',
+                },
+                hasEndpoint,
+                isActionExpanded,
+                hasEndpoint ? () => toggleNodeExpansion(actionNodeId) : undefined,
+                actionHighlight
+              )
+            );
+            newEdges.push({
+              id: `${nodeId}-${actionNodeId}`,
+              source: nodeId,
+              target: actionNodeId,
+              animated: true,
+              markerEnd: { type: MarkerType.ArrowClosed },
+              style: { stroke: '#13c2c2', strokeWidth: 2 },
+            });
+            if (isActionExpanded && action.endpoint_details) {
+              const endpointNodeId = `endpoint-${node.id}-${i}`;
+              const endpointX = actionX + horizontalSpacing;
+              const endpointY = yTracker.current;
+              yTracker.current += verticalSpacing;
+              const endpointLabel = formatEndpointNodeLabel(action.endpoint_details, action.endpoint);
+              // Highlight if matches search
+              const endpointHighlight = !!searchQuery && [
+                action.endpoint_details?.method,
+                action.endpoint_details?.path,
+                action.endpoint,
+              ]
+                .filter((value): value is string => typeof value === 'string' && value.length > 0)
+                .some((value) => nodeMatchesSearch(value, searchQuery));
+              newNodes.push(
+                createExpandableNode(
+                  endpointNodeId,
+                  endpointLabel,
+                  { x: endpointX, y: endpointY },
+                  {
+                    background: '#fff1f0',
+                    color: '#a8071a',
+                    padding: '8px 14px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    textAlign: 'center',
+                    maxWidth: '200px',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    minWidth: '140px',
+                  },
+                  false,
+                  false,
+                  undefined,
+                  endpointHighlight
+                )
+              );
+              newEdges.push({
+                id: `${actionNodeId}-${endpointNodeId}`,
+                source: actionNodeId,
+                target: endpointNodeId,
+                markerEnd: { type: MarkerType.ArrowClosed },
+                style: { stroke: '#ff4d4f', strokeWidth: 1 },
+              });
+            }
+          }
+        }
+        // Render children pages
+        if (node.children && node.children.length > 0) {
+          node.children.forEach((child) => {
+            renderPageNode(child, nodeId, level + 1, nodeX);
+          });
+        }
+      }
+    };
+    allPages.forEach((page) => {
+      renderPageNode(page, null, 0, 100);
+    });
+    setNodes(newNodes);
+    setEdges(newEdges);
+  }, [createExpandableNode, toggleNodeExpansion, expandedNodes, setNodes, setEdges, searchQuery, nodeMatchesSearch]);
+
+  // Rebuild visualization when expanded nodes or data change
+  useEffect(() => {
+    if (viewType === 'user' && userAccessData && selectedUser) {
+      buildUserAccessVisualization(userAccessData, expandedNodes);
+    } else if (viewType === 'page' && uiPages.length > 0 && !selectedPage) {
+      // Show all pages when no specific page is selected
+      buildAllPagesVisualization(uiPages);
+    } else if (viewType === 'page' && pageAccessData && selectedPage) {
+      buildPageAccessVisualization(pageAccessData, expandedNodes);
+    }
+  }, [
+    expandedNodes,
+    viewType,
+    userAccessData,
+    selectedUser,
+    buildUserAccessVisualization,
+    pageAccessData,
+    selectedPage,
+    buildPageAccessVisualization,
+    uiPages,
+    buildAllPagesVisualization,
+  ]);
+
+  // Handle user selection
+  const handleUserChange = (userId: number) => {
+    setSelectedUser(userId);
+    setSelectedPage(null);
+    setPageAccessData(null);
+    buildUserAccessMap(userId);
+  };
+
+  // Clear visualization
+  const handleClear = () => {
+    setSelectedUser(null);
+    setSelectedPage(null);
+    setNodes([]);
+    setEdges([]);
+    setExpandedNodes(new Set());
+    setUserAccessData(null);
+    setPageAccessData(null);
+    setUiPages([]);
+  };
+
+  // Handle node click for expand/collapse
+  const handleNodeClick = useCallback((_event: any, node: Node) => {
+    if (node.data.onClick) {
+      node.data.onClick();
+    }
+  }, []);
+
+  return (
+    <div>
+      <Title level={2}>Access Visualization</Title>
+      <Card style={{ marginBottom: 16 }}>
+        <Space direction="vertical" style={{ width: '100%' }} size="large">
+          <Space wrap>
+            <Select
+              style={{ width: 200 }}
+              placeholder="Select View Type"
+              value={viewType}
+              onChange={setViewType}
+            >
+              <Option value="user">User Access Flow</Option>
+              <Option value="page">UI Page Flow</Option>
+            </Select>
+
+            {viewType === 'user' && (
+              <Select
+                showSearch
+                style={{ width: 300 }}
+                placeholder="Select a user"
+                value={selectedUser}
+                onChange={handleUserChange}
+                filterOption={(input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                }
+                optionFilterProp="children"
+              >
+                {users && Array.isArray(users) && users.map(user => (
+                  <Option key={user.id} value={user.id}>
+                    {user.fullName} ({user.username})
+                  </Option>
+                ))}
+              </Select>
+            )}
+
+            {/* Show search input only after visualization is loaded */}
+            {nodes.length > 0 && (
+              <input
+                type="text"
+                placeholder="Search pages, actions, endpoints..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                style={{ width: 320, padding: '6px 12px', borderRadius: 4, border: '1px solid #d9d9d9' }}
+              />
+            )}
+
+            <Button onClick={handleClear}>Clear</Button>
+          </Space>
+
+          {viewType === 'user' && userAccessData && userSummary && (
+            <Space wrap>
+              <Tag color="blue">{userSummary.userLabel}</Tag>
+              <Tag color="green">{userSummary.rolesLabel}</Tag>
+              <Tag color="orange">{userSummary.policiesLabel}</Tag>
+              <Tag color="red">{userSummary.endpointsLabel}</Tag>
+              <Tag color="cyan">{userSummary.actionsLabel}</Tag>
+              <Tag color="purple">{userSummary.pagesLabel}</Tag>
+            </Space>
+          )}
+
+          {viewType === 'page' && uiPages.length > 0 && !selectedPage && (
+            <Space wrap>
+              <Tag color="blue">Full UI Page Hierarchy</Tag>
+              <Tag color="purple">{uiPages.length} root pages</Tag>
+            </Space>
+          )}
+
+          {viewType === 'page' && pageAccessData && pageSummary && (
+            <Space wrap>
+              <Tag color="purple">{pageSummary.pageLabel}</Tag>
+              <Tag color="blue">{pageSummary.pagesLabel}</Tag>
+              <Tag color="cyan">{pageSummary.actionsLabel}</Tag>
+              <Tag color="red">{pageSummary.endpointsLabel}</Tag>
+            </Space>
+          )}
+
+          <Alert
+            message="Interactive Top-Down Visualization"
+            description="All nodes start collapsed. Click on nodes with arrows (▶/▼) to expand and see their children in a vertical tree structure. Use search to highlight matching nodes."
+            type="info"
+            showIcon
+            closable
+          />
+
+          {error && <Alert message={error} type="error" />}
+        </Space>
+      </Card>
+
+      <Card>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '100px 0' }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 16 }}>Building visualization...</div>
+          </div>
+        ) : (
+          <div style={{ height: '70vh', width: '100%' }}>
+            {nodes.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '100px 0', color: '#999' }}>
+                {viewType === 'user' 
+                  ? 'Select a user to visualize access flow'
+                  : 'Select "UI Page Flow" to view the full page hierarchy'
+                }
+              </div>
+            ) : (
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeClick={handleNodeClick}
+                fitView
+                attributionPosition="bottom-left"
+              >
+                <Controls />
+                <Background />
+              </ReactFlow>
+            )}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+};

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Card,
   Button,
   Input,
   Space,
@@ -14,6 +13,7 @@ import {
   Empty,
   Table,
   Select,
+  Collapse,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -50,6 +50,8 @@ interface PageActionForm {
 export const PageWorkspace = () => {
   const queryClient = useQueryClient();
 
+  const [parentPageSearch, setParentPageSearch] = useState('');
+  const [childPageSearch, setChildPageSearch] = useState('');
   const [actionSearch, setActionSearch] = useState('');
   const [selectedParentPageId, setSelectedParentPageId] = useState<number | null>(null);
   const [selectedChildPageId, setSelectedChildPageId] = useState<number | null>(null);
@@ -122,9 +124,17 @@ export const PageWorkspace = () => {
   // Separate parent and child pages
   const parentPages = useMemo(() => {
     const parents = pagesData.filter(page => page.parentId === null || page.parentId === undefined);
-    console.log('Parent pages:', parents);
+    
+    // Apply search filter
+    if (parentPageSearch) {
+      return parents.filter(page =>
+        page.label.toLowerCase().includes(parentPageSearch.toLowerCase()) ||
+        page.route.toLowerCase().includes(parentPageSearch.toLowerCase())
+      );
+    }
+    
     return parents;
-  }, [pagesData]);
+  }, [pagesData, parentPageSearch]);
 
   const childPages = useMemo(() => {
     if (selectedParentPageId === null) return [];
@@ -132,11 +142,17 @@ export const PageWorkspace = () => {
       // Handle both number and string comparison
       return page.parentId != null && Number(page.parentId) === Number(selectedParentPageId);
     });
-    console.log('Selected parent ID:', selectedParentPageId);
-    console.log('Child pages for parent:', children);
-    console.log('All pages:', pagesData.map(p => ({ id: p.id, label: p.label, parentId: p.parentId, parentIdType: typeof p.parentId })));
+    
+    // Apply search filter
+    if (childPageSearch) {
+      return children.filter(page =>
+        page.label.toLowerCase().includes(childPageSearch.toLowerCase()) ||
+        page.route.toLowerCase().includes(childPageSearch.toLowerCase())
+      );
+    }
+    
     return children;
-  }, [pagesData, selectedParentPageId]);
+  }, [pagesData, selectedParentPageId, childPageSearch]);
 
   // Initialize with first parent page
   useEffect(() => {
@@ -469,156 +485,281 @@ export const PageWorkspace = () => {
 
   return (
     <div>
-      <Title level={2}>Pages & Actions Workspace</Title>
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        {/* Parent Page Selection */}
-        <Card
-          title="Parent Pages"
-          extra={
-            <Space>
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={() => {
-                  refetchPages();
-                  refetchActions();
-                }}
-              >
-                Refresh
-              </Button>
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => setIsCreatePageModalOpen(true)}
-              >
-                New Page
-              </Button>
-            </Space>
-          }
-        >
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <Text>Select a parent page to view its child pages:</Text>
-            <Select
-              style={{ width: '100%' }}
-              placeholder="Select a parent page"
-              value={selectedParentPageId}
-              onChange={(value) => {
-                setSelectedParentPageId(value);
-                setSelectedChildPageId(null);
-              }}
-              options={parentPages.map(page => ({
-                label: `${page.label} (${page.route})`,
-                value: page.id,
-              }))}
-              loading={pagesLoading}
-            />
-          </Space>
-        </Card>
-
-        {/* Child Pages Table */}
-        {selectedParentPageId && (
-          <Card
-            title={`Child Pages of ${parentPages.find(p => p.id === selectedParentPageId)?.label || ''}`}
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Title level={2} style={{ margin: 0 }}>Pages & Actions Workspace</Title>
+        <Space>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              refetchPages();
+              refetchActions();
+            }}
           >
-            <Table
-              dataSource={childPages}
-              rowKey="id"
-              size="small"
-              pagination={false}
-              loading={pagesLoading}
-              onRow={(record) => ({
-                onClick: () => setSelectedChildPageId(record.id),
-                style: {
-                  cursor: 'pointer',
-                  background: selectedChildPageId === record.id ? '#e6f7ff' : undefined,
-                },
-              })}
-              locale={{
-                emptyText: (
-                  <Empty
-                    description="No child pages found."
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+            Refresh All
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setIsCreatePageModalOpen(true)}
+          >
+            New Page
+          </Button>
+        </Space>
+      </div>
+
+      <Collapse
+        defaultActiveKey={['parent-pages', 'child-pages', 'actions']}
+        items={[
+          {
+            key: 'parent-pages',
+            label: <Text strong style={{ fontSize: 16 }}>Parent Pages</Text>,
+            children: (
+              <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                  <Text>Click on a parent page to view its child pages:</Text>
+                  <Input
+                    allowClear
+                    placeholder="Search parent pages..."
+                    prefix={<SearchOutlined />}
+                    value={parentPageSearch}
+                    onChange={(e) => setParentPageSearch(e.target.value)}
+                    style={{ width: 300 }}
                   />
-                ),
-              }}
-            >
-              <Table.Column 
-                title="Label" 
-                dataIndex="label" 
-                key="label"
-                width={200}
-              />
-              <Table.Column 
-                title="Route" 
-                dataIndex="route" 
-                key="route"
-                width={250}
-              />
-              <Table.Column 
-                title="Icon" 
-                dataIndex="icon" 
-                key="icon"
-                width={100}
-                render={(icon?: string) => icon || '-'}
-              />
-              <Table.Column 
-                title="Display Order" 
-                dataIndex="displayOrder" 
-                key="displayOrder"
-                width={120}
-              />
-              <Table.Column 
-                title="Actions" 
-                key="actions"
-                width={200}
-                fixed="right"
-                render={(_, record: UIPage) => {
-                  const counts = pageActionCountMap.get(record.id);
-                  return (
-                    <Space size="small">
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {counts ? `${counts.active}/${counts.total}` : '0/0'}
-                      </Text>
-                      <Button 
-                        size="small" 
-                        icon={<EditOutlined />} 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleEditPage(record);
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Popconfirm
-                        title="Delete this page?"
-                        onConfirm={(e) => {
-                          e?.stopPropagation();
-                          handleDeletePage(record.id);
-                        }}
-                        okText="Yes"
-                        cancelText="No"
-                      >
+                </Space>
+                <Table
+                  dataSource={parentPages}
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  loading={pagesLoading}
+                  onRow={(record) => ({
+                    onClick: () => {
+                      setSelectedParentPageId(record.id);
+                      setSelectedChildPageId(null);
+                    },
+                    style: {
+                      cursor: 'pointer',
+                      background: selectedParentPageId === record.id ? '#e6f7ff' : undefined,
+                    },
+                  })}
+                >
+                  <Table.Column 
+                    title="Label" 
+                    dataIndex="label" 
+                    key="label"
+                    width={200}
+                    render={(text: string) => <strong>{text}</strong>}
+                  />
+                  <Table.Column 
+                    title="Route" 
+                    dataIndex="route" 
+                    key="route"
+                    width={250}
+                  />
+                  <Table.Column 
+                    title="Icon" 
+                    dataIndex="icon" 
+                    key="icon"
+                    width={100}
+                    render={(icon?: string) => icon || '-'}
+                  />
+                  <Table.Column 
+                    title="Display Order" 
+                    dataIndex="displayOrder" 
+                    key="displayOrder"
+                    width={120}
+                  />
+                  <Table.Column 
+                    title="Children" 
+                    key="childrenCount"
+                    width={100}
+                    render={(_, record: UIPage) => {
+                      const childCount = pagesData.filter(p => p.parentId === record.id).length;
+                      return <Text type="secondary">{childCount} page{childCount !== 1 ? 's' : ''}</Text>;
+                    }}
+                  />
+                  <Table.Column 
+                    title="Actions" 
+                    key="actions"
+                    width={150}
+                    fixed="right"
+                    render={(_, record: UIPage) => (
+                      <Space size="small">
                         <Button 
                           size="small" 
-                          danger
-                          onClick={(e) => e.stopPropagation()}
+                          icon={<EditOutlined />} 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleEditPage(record);
+                          }}
                         >
-                          Delete
+                          Edit
                         </Button>
-                      </Popconfirm>
-                    </Space>
-                  );
-                }}
+                        <Popconfirm
+                          title="Delete this page?"
+                          description="This will also affect its child pages."
+                          onConfirm={(e) => {
+                            e?.stopPropagation();
+                            handleDeletePage(record.id);
+                          }}
+                          okText="Yes"
+                          cancelText="No"
+                        >
+                          <Button 
+                            size="small" 
+                            danger
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            Delete
+                          </Button>
+                        </Popconfirm>
+                      </Space>
+                    )}
+                  />
+                </Table>
+              </Space>
+            ),
+          },
+          {
+            key: 'child-pages',
+            label: (
+              <Text strong style={{ fontSize: 16 }}>
+                {selectedParentPageId 
+                  ? `Child Pages of ${parentPages.find(p => p.id === selectedParentPageId)?.label || ''}`
+                  : 'Child Pages (Select a parent page first)'}
+              </Text>
+            ),
+            children: selectedParentPageId ? (
+              <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                <Input
+                  allowClear
+                  placeholder="Search child pages..."
+                  prefix={<SearchOutlined />}
+                  value={childPageSearch}
+                  onChange={(e) => setChildPageSearch(e.target.value)}
+                  style={{ width: 300 }}
+                />
+                <Table
+                  dataSource={childPages}
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  loading={pagesLoading}
+                  onRow={(record) => ({
+                    onClick: () => setSelectedChildPageId(record.id),
+                    style: {
+                      cursor: 'pointer',
+                      background: selectedChildPageId === record.id ? '#e6f7ff' : undefined,
+                    },
+                  })}
+                  locale={{
+                    emptyText: (
+                      <Empty
+                        description="No child pages found."
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
+                    ),
+                  }}
+                >
+                <Table.Column 
+                  title="Label" 
+                  dataIndex="label" 
+                  key="label"
+                  width={200}
+                />
+                <Table.Column 
+                  title="Route" 
+                  dataIndex="route" 
+                  key="route"
+                  width={250}
+                />
+                <Table.Column 
+                  title="Parent Page" 
+                  dataIndex="parentId" 
+                  key="parentId"
+                  width={180}
+                  render={(parentId?: number) => {
+                    if (!parentId) return '-';
+                    const parent = pagesData.find(p => p.id === parentId);
+                    return parent ? parent.label : `ID: ${parentId}`;
+                  }}
+                />
+                <Table.Column 
+                  title="Icon" 
+                  dataIndex="icon" 
+                  key="icon"
+                  width={100}
+                  render={(icon?: string) => icon || '-'}
+                />
+                <Table.Column 
+                  title="Display Order" 
+                  dataIndex="displayOrder" 
+                  key="displayOrder"
+                  width={120}
+                />
+                <Table.Column 
+                  title="Actions" 
+                  key="actions"
+                  width={200}
+                  fixed="right"
+                  render={(_, record: UIPage) => {
+                    const counts = pageActionCountMap.get(record.id);
+                    return (
+                      <Space size="small">
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {counts ? `${counts.active}/${counts.total}` : '0/0'}
+                        </Text>
+                        <Button 
+                          size="small" 
+                          icon={<EditOutlined />} 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleEditPage(record);
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Popconfirm
+                          title="Delete this page?"
+                          onConfirm={(e) => {
+                            e?.stopPropagation();
+                            handleDeletePage(record.id);
+                          }}
+                          okText="Yes"
+                          cancelText="No"
+                        >
+                          <Button 
+                            size="small" 
+                            danger
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            Delete
+                          </Button>
+                        </Popconfirm>
+                      </Space>
+                    );
+                  }}
+                />
+              </Table>
+              </Space>
+            ) : (
+              <Empty
+                description="Select a parent page above to view its child pages"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
               />
-            </Table>
-          </Card>
-        )}
-
-        {/* Actions Table */}
-        {selectedChildPageId && (
-          <Card
-            title={`Actions for ${selectedPage?.label || ''}`}
-            extra={
-              <Space>
+            ),
+          },
+          {
+            key: 'actions',
+            label: (
+              <Text strong style={{ fontSize: 16 }}>
+                {selectedChildPageId 
+                  ? `Actions for ${selectedPage?.label || ''}`
+                  : 'Page Actions (Select a child page first)'}
+              </Text>
+            ),
+            extra: selectedChildPageId && (
+              <Space onClick={(e) => e.stopPropagation()}>
                 <Input
                   allowClear
                   placeholder="Search actions"
@@ -626,11 +767,13 @@ export const PageWorkspace = () => {
                   value={actionSearch}
                   onChange={(e) => setActionSearch(e.target.value)}
                   style={{ width: 220 }}
+                  onClick={(e) => e.stopPropagation()}
                 />
                 <Button
                   type="primary"
                   icon={<PlusOutlined />}
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     createActionForm.setFieldsValue({
                       pageId: selectedChildPageId,
                       isActive: true,
@@ -642,32 +785,41 @@ export const PageWorkspace = () => {
                   New Action
                 </Button>
               </Space>
-            }
-          >
-            <Space direction="vertical" size={8} style={{ marginBottom: 16 }}>
-              <Text type="secondary">
-                Total: {actionSummary.total} | Active: {actionSummary.active} | Inactive: {actionSummary.inactive}
-              </Text>
-            </Space>
-            <Table
-              dataSource={filteredActions}
-              columns={actionColumns}
-              rowKey="id"
-              size="small"
-              pagination={{ pageSize: 10 }}
-              locale={{
-                emptyText: (
-                  <Empty
-                    description="No actions for this page yet."
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  />
-                ),
-              }}
-            />
-          </Card>
-        )}
-      </Space>
+            ),
+            children: selectedChildPageId ? (
+              <>
+                <Space direction="vertical" size={8} style={{ marginBottom: 16 }}>
+                  <Text type="secondary">
+                    Total: {actionSummary.total} | Active: {actionSummary.active} | Inactive: {actionSummary.inactive}
+                  </Text>
+                </Space>
+                <Table
+                  dataSource={filteredActions}
+                  columns={actionColumns}
+                  rowKey="id"
+                  size="small"
+                  pagination={{ pageSize: 10 }}
+                  locale={{
+                    emptyText: (
+                      <Empty
+                        description="No actions for this page yet."
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
+                    ),
+                  }}
+                />
+              </>
+            ) : (
+              <Empty
+                description="Select a child page above to view and manage its actions"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
+            ),
+          },
+        ]}
+      />
 
+      {/* Modals */}
       <Modal
         title="Create Page"
         open={isCreatePageModalOpen}
@@ -710,7 +862,7 @@ export const PageWorkspace = () => {
               filterOption={(input, option) =>
                 (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
               }
-              options={parentPages.map((page) => ({
+              options={pagesData.map((page) => ({
                 label: `${page.label} (${page.route})`,
                 value: page.id,
               }))}
@@ -770,10 +922,12 @@ export const PageWorkspace = () => {
               filterOption={(input, option) =>
                 (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
               }
-              options={parentPages.map((page) => ({
-                label: `${page.label} (${page.route})`,
-                value: page.id,
-              }))}
+              options={pagesData
+                .filter((page) => page.id !== selectedPage?.id) // Prevent selecting itself
+                .map((page) => ({
+                  label: `${page.label} (${page.route})`,
+                  value: page.id,
+                }))}
             />
           </Form.Item>
           <Form.Item

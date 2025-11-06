@@ -1,19 +1,359 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Card, Select, Spin, Alert, Typography, Space, Button, Tag } from 'antd';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import {
+  Card,
+  Select,
+  Spin,
+  Alert,
+  Typography,
+  Space,
+  Button,
+  Tag,
+  Tooltip,
+  Input,
+} from 'antd';
 import ReactFlow, {
   Controls,
   Background,
   useNodesState,
   useEdgesState,
-  MarkerType,
   Position,
+  MarkerType,
+  EdgeLabelRenderer,
+  BaseEdge,
+  getSmoothStepPath,
+  Handle,
 } from 'reactflow';
-import type { Node, Edge } from 'reactflow';
+import type { Node, Edge, NodeProps, EdgeProps, ReactFlowInstance } from 'reactflow';
+import dagre from 'dagre';
+import { CaretDownOutlined, CaretRightOutlined } from '@ant-design/icons';
 import 'reactflow/dist/style.css';
 import { api } from '../services/api';
+import { AccessDenied } from '../components/AccessDenied';
 
 const { Title } = Typography;
 const { Option } = Select;
+
+const clampStyle = (lines: number) => ({
+  display: '-webkit-box',
+  WebkitLineClamp: lines,
+  WebkitBoxOrient: 'vertical' as const,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
+type NodeCategory = 'user' | 'role' | 'policy' | 'endpoint' | 'action' | 'page';
+
+interface NodeBadge {
+  text: string;
+  color?: string;
+}
+
+interface Dimensions {
+  width: number;
+  height: number;
+}
+
+interface AccessNodeData {
+  category: NodeCategory;
+  title: string;
+  subtitle?: string;
+  description?: string;
+  badges?: NodeBadge[];
+  highlight?: boolean;
+  collapsible?: boolean;
+  isExpanded?: boolean;
+  onToggle?: () => void;
+  tooltip?: string;
+  dimensions?: Dimensions;
+}
+
+interface AccessEdgeData {
+  label?: string;
+  highlight?: boolean;
+}
+
+const DEFAULT_NODE_DIMENSIONS: Record<NodeCategory, Dimensions> = {
+  user: { width: 300, height: 150 },
+  role: { width: 260, height: 136 },
+  policy: { width: 260, height: 136 },
+  endpoint: { width: 300, height: 156 },
+  action: { width: 240, height: 124 },
+  page: { width: 240, height: 120 },
+};
+
+const CATEGORY_STYLES: Record<NodeCategory, { background: string; border: string; accent: string }> = {
+  user: { background: '#f0f9ff', border: '#91d5ff', accent: '#096dd9' },
+  role: { background: '#f6ffed', border: '#b7eb8f', accent: '#237804' },
+  policy: { background: '#fff7e6', border: '#ffd591', accent: '#d46b08' },
+  endpoint: { background: '#fff1f0', border: '#ffa39e', accent: '#a8071a' },
+  action: { background: '#e6fffb', border: '#87e8de', accent: '#006d75' },
+  page: { background: '#f9f0ff', border: '#d3adf7', accent: '#531dab' },
+};
+
+const layoutNodes = (
+  nodes: Node<AccessNodeData>[],
+  edges: Edge<AccessEdgeData>[],
+  direction: 'TB' | 'LR' = 'TB'
+): Node<AccessNodeData>[] => {
+  if (!nodes.length) return nodes;
+
+  const dagreGraph = new dagre.graphlib.Graph();
+  dagreGraph.setGraph({
+    rankdir: direction,
+    nodesep: 130,
+    ranksep: 170,
+    marginx: 40,
+    marginy: 40,
+  });
+  dagreGraph.setDefaultEdgeLabel(() => ({}));
+
+  nodes.forEach((node) => {
+    const dims = node.data.dimensions ?? DEFAULT_NODE_DIMENSIONS[node.data.category];
+    dagreGraph.setNode(node.id, { width: dims.width, height: dims.height });
+  });
+
+  edges.forEach((edge) => {
+    dagreGraph.setEdge(edge.source, edge.target);
+  });
+
+  dagre.layout(dagreGraph);
+
+  return nodes.map((node) => {
+    const layoutInfo = dagreGraph.node(node.id);
+    const dims = node.data.dimensions ?? DEFAULT_NODE_DIMENSIONS[node.data.category];
+    if (layoutInfo) {
+      return {
+        ...node,
+        position: {
+          x: layoutInfo.x - dims.width / 2,
+          y: layoutInfo.y - dims.height / 2,
+        },
+        data: { ...node.data, dimensions: dims },
+        targetPosition: Position.Top,
+        sourcePosition: Position.Bottom,
+        draggable: false,
+      };
+    }
+    return node;
+  });
+};
+
+const createAccessNode = (
+  id: string,
+  category: NodeCategory,
+  data: Omit<AccessNodeData, 'category'>
+): Node<AccessNodeData> => {
+  const dims = data.dimensions ?? DEFAULT_NODE_DIMENSIONS[category];
+  return {
+    id,
+    type: 'accessNode',
+    position: { x: 0, y: 0 },
+    data: {
+      ...data,
+      category,
+      dimensions: dims,
+    },
+    draggable: false,
+    selectable: true,
+  };
+};
+
+const createAccessEdge = (
+  id: string,
+  source: string,
+  target: string,
+  options?: { label?: string; highlight?: boolean; color?: string; animated?: boolean }
+): Edge<AccessEdgeData> => {
+  const color = options?.color ?? '#bfbfbf';
+  const highlight = options?.highlight ?? false;
+  return {
+    id,
+    source,
+    target,
+    type: 'accessEdge',
+    markerEnd: { type: MarkerType.ArrowClosed },
+    animated: options?.animated ?? false,
+    data: options?.label ? { label: options.label, highlight } : { highlight },
+    style: {
+      stroke: highlight ? '#faad14' : color,
+      strokeWidth: highlight ? 2 : 1.4,
+    },
+  };
+};
+
+const AccessNode = ({ data }: NodeProps<AccessNodeData>) => {
+  const palette = CATEGORY_STYLES[data.category];
+  const width = data.dimensions?.width ?? DEFAULT_NODE_DIMENSIONS[data.category].width;
+  const height = data.dimensions?.height ?? DEFAULT_NODE_DIMENSIONS[data.category].height;
+
+  const handleToggle = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    data.onToggle?.();
+  };
+
+  const hiddenHandleStyle = { opacity: 0, width: 0, height: 0, border: 'none' };
+
+  return (
+    <div
+      style={{
+        width,
+        height,
+        borderRadius: 12,
+        border: `2px solid ${data.highlight ? '#d32029' : palette.border}`,
+        background: palette.background,
+        boxShadow: data.highlight ? '0 0 18px rgba(211,32,41,0.55)' : '0 6px 18px rgba(0,0,0,0.08)',
+        padding: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        pointerEvents: 'all',
+        boxSizing: 'border-box',
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={hiddenHandleStyle} isConnectable={false} />
+      <Handle type="source" position={Position.Bottom} style={hiddenHandleStyle} isConnectable={false} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <Tooltip title={data.title}>
+          <div
+            style={{
+              flex: 1,
+              fontSize: 14,
+              fontWeight: 600,
+              color: palette.accent,
+              lineHeight: 1.35,
+              ...clampStyle(2),
+            }}
+          >
+            {data.title}
+          </div>
+        </Tooltip>
+        {data.collapsible ? (
+          <button
+            onClick={handleToggle}
+            onMouseDown={(event) => event.stopPropagation()}
+            style={{
+              border: 'none',
+              background: '#ffffff',
+              borderRadius: 6,
+              width: 28,
+              height: 28,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: palette.accent,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
+            }}
+            aria-label={data.isExpanded ? 'Collapse node' : 'Expand node'}
+          >
+            {data.isExpanded ? <CaretDownOutlined /> : <CaretRightOutlined />}
+          </button>
+        ) : null}
+      </div>
+      {data.subtitle ? (
+        <Tooltip title={data.subtitle}>
+          <div
+            style={{
+              fontSize: 12,
+              color: '#434343',
+              lineHeight: 1.4,
+              ...clampStyle(2),
+            }}
+          >
+            {data.subtitle}
+          </div>
+        </Tooltip>
+      ) : null}
+      {data.description ? (
+        <Tooltip title={data.description}>
+          <div
+            style={{
+              fontSize: 12,
+              color: '#595959',
+              ...clampStyle(3),
+            }}
+          >
+            {data.description}
+          </div>
+        </Tooltip>
+      ) : null}
+      {data.badges && data.badges.length ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {data.badges.map((badge, index) => (
+            <span
+              key={`${badge.text}-${index}`}
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '2px 8px',
+                borderRadius: 8,
+                background: '#ffffff',
+                border: `1px solid ${badge.color ?? palette.accent}`,
+                color: badge.color ?? palette.accent,
+              }}
+            >
+              {badge.text}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const AccessEdge = ({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  data,
+  markerEnd,
+  style,
+}: EdgeProps<AccessEdgeData>) => {
+  const [path, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  });
+
+  const stroke = data?.highlight ? '#fa8c16' : style?.stroke ?? '#bfbfbf';
+  const strokeWidth = data?.highlight ? 2 : style?.strokeWidth ?? 1.4;
+
+  return (
+    <>
+      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={{ ...style, stroke, strokeWidth }} />
+      {data?.label ? (
+        <EdgeLabelRenderer>
+          <div
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              background: '#ffffff',
+              borderRadius: 6,
+              border: '1px solid #d9d9d9',
+              padding: '2px 8px',
+              fontSize: 11,
+              color: '#595959',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+              pointerEvents: 'all',
+            }}
+          >
+            {data.label}
+          </div>
+        </EdgeLabelRenderer>
+      ) : null}
+    </>
+  );
+};
+
+const nodeTypes = { accessNode: AccessNode };
+const edgeTypes = { accessEdge: AccessEdge };
 
 const formatCountLabel = (count: number, singular: string, plural?: string) => {
   if (count === 0) return '';
@@ -37,40 +377,34 @@ interface UserData {
   email?: string;
 }
 
-interface PageData {
+interface PageActionEndpoint {
+  service?: string;
+  version?: string;
+  method?: string;
+  path?: string;
+}
+
+interface PageAction {
+  label: string;
+  action: string;
+  endpoint?: string;
+  endpoint_details?: PageActionEndpoint;
+}
+
+interface PageNode {
   id: number;
+  key: string;
   label: string;
   route: string;
-  icon?: string;
-  displayOrder?: number;
-  isMenuItem?: boolean;
-  isActive?: boolean;
-  parentId?: number | null;
-  actionCount?: number;
-  createdAt?: string;
-  updatedAt?: string | null;
+  is_requested?: boolean;
+  actions?: PageAction[];
+  children?: PageNode[];
 }
 
 interface UiAccessMatrixResponse {
   generated_at: string;
   version: number;
-  page_id: number;
-  page: {
-    key: string;
-    label: string;
-    route: string;
-  };
-  actions: {
-    label: string;
-    action: string;
-    endpoint?: {
-      service: string;
-      version: string;
-      method: string;
-      path: string;
-      description?: string;
-    };
-  }[];
+  pages: RawPageNode[];
 }
 
 interface UserAccessMatrixPageAction {
@@ -123,43 +457,196 @@ interface ProcessedUserAccessData {
 
 interface ProcessedPageAccessData {
   pageId: number;
-  page: {
-    key: string;
-    label: string;
-    route: string;
-  };
-  actions: UiAccessMatrixResponse['actions'];
+  pageNode: PageNode;
+  allPages: PageNode[];
 }
 
-export const AccessVisualization = () => {
+const findPageById = (pages: PageNode[], pageId: number): PageNode | null => {
+  for (const page of pages) {
+    if (page.id === pageId) return page;
+    if (page.children) {
+      const found = findPageById(page.children, pageId);
+      if (found) return found;
+    }
+  }
+  return null;
+};
+
+interface RawPageSummary {
+  id?: number;
+  key?: string;
+  label?: string;
+  route?: string;
+}
+
+interface RawEndpointInfo {
+  service?: string;
+  version?: string;
+  method?: string;
+  path?: string;
+}
+
+interface RawPageAction {
+  label?: string;
+  action?: string;
+  endpoint?: string | RawEndpointInfo | null;
+  endpoint_details?: RawEndpointInfo | null;
+}
+
+interface RawPageNode {
+  id?: number;
+  page_id?: number;
+  generated_at?: string;
+  version?: number;
+  key?: string;
+  label?: string;
+  route?: string;
+  page?: RawPageSummary | null;
+  is_requested?: boolean;
+  actions?: RawPageAction[] | null;
+  children?: RawPageNode[] | null;
+  page_children?: RawPageNode[] | null;
+}
+
+const mergeEndpointInfo = (
+  primary?: RawEndpointInfo | null,
+  secondary?: RawEndpointInfo | null
+): PageActionEndpoint | undefined => {
+  const combined = {
+    service: primary?.service ?? secondary?.service,
+    version: primary?.version ?? secondary?.version,
+    method: primary?.method ?? secondary?.method,
+    path: primary?.path ?? secondary?.path,
+  };
+
+  const hasValue = Object.values(combined).some((value) => typeof value === 'string' && value.length > 0);
+  return hasValue ? combined : undefined;
+};
+
+const normalizePageAction = (rawAction: RawPageAction): PageAction => {
+  const endpointDetails = mergeEndpointInfo(
+    typeof rawAction.endpoint === 'object' && rawAction.endpoint !== null && !Array.isArray(rawAction.endpoint)
+      ? rawAction.endpoint
+      : null,
+    rawAction.endpoint_details
+  );
+
+  const endpointString =
+    typeof rawAction.endpoint === 'string'
+      ? rawAction.endpoint
+      : endpointDetails
+        ? [endpointDetails.method, endpointDetails.path].filter(Boolean).join(' ')
+        : undefined;
+
+  return {
+    label: rawAction.label ?? '',
+    action: rawAction.action ?? '',
+    endpoint: endpointString,
+    endpoint_details: endpointDetails,
+  };
+};
+
+const normalizePageNode = (rawNode: RawPageNode): PageNode => {
+  const pageInfo = rawNode.page ?? null;
+  const nodeId = pageInfo?.id ?? rawNode.id ?? rawNode.page_id ?? 0;
+  const nodeKey = pageInfo?.key ?? rawNode.key ?? `${nodeId}`;
+  const nodeLabel = pageInfo?.label ?? rawNode.label ?? nodeKey;
+  const nodeRoute = pageInfo?.route ?? rawNode.route ?? '';
+
+  const rawChildren = rawNode.children ?? rawNode.page_children ?? [];
+  const normalizedChildren = Array.isArray(rawChildren) ? rawChildren.map(normalizePageNode) : [];
+
+  const rawActions = rawNode.actions ?? [];
+  const normalizedActions = Array.isArray(rawActions) ? rawActions.map(normalizePageAction) : [];
+
+  return {
+    id: nodeId,
+    key: nodeKey,
+    label: nodeLabel,
+    route: nodeRoute,
+    is_requested: rawNode.is_requested,
+    actions: normalizedActions,
+    children: normalizedChildren,
+  };
+};
+
+const normalizePageNodes = (pages: RawPageNode[] | null | undefined): PageNode[] => {
+  if (!Array.isArray(pages)) return [];
+  return pages.map(normalizePageNode);
+};
+
+const formatEndpointNodeLabel = (
+  endpointDetails?: PageActionEndpoint,
+  endpointString?: string
+): { title: string; subtitle?: string } => {
+  if (endpointDetails) {
+    const { method, path, service } = endpointDetails;
+    if (method && path) return { title: method, subtitle: path };
+    if (path) return { title: path, subtitle: method ?? service };
+    if (method) return { title: method, subtitle: service };
+    if (service) return { title: service };
+  }
+
+  if (endpointString) {
+    const [method, ...rest] = endpointString.split(' ');
+    if (rest.length) {
+      return { title: method, subtitle: rest.join(' ') };
+    }
+    return { title: endpointString };
+  }
+
+  return { title: 'Endpoint' };
+};
+
+export const AccessVisualization: React.FC = () => {
   const [users, setUsers] = useState<UserData[]>([]);
-  const [pages, setPages] = useState<PageData[]>([]);
+  const [uiPages, setUiPages] = useState<PageNode[]>([]);
   const [selectedUser, setSelectedUser] = useState<number | null>(null);
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewType, setViewType] = useState<'user' | 'page'>('user');
-  
-  // State to track expanded nodes
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  
-  // Store full data for rebuild on expand/collapse
   const [userAccessData, setUserAccessData] = useState<ProcessedUserAccessData | null>(null);
   const [pageAccessData, setPageAccessData] = useState<ProcessedPageAccessData | null>(null);
+  const [nodes, setNodes, onNodesChange] = useNodesState<AccessNodeData>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<AccessEdgeData>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [forbidden, setForbidden] = useState(false);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
 
-  // Toggle node expansion
+  const applyGraph = useCallback(
+    (nextNodes: Node<AccessNodeData>[], nextEdges: Edge<AccessEdgeData>[]) => {
+      const layoutedNodes = layoutNodes(nextNodes, nextEdges);
+      setNodes(layoutedNodes);
+      setEdges(nextEdges);
+    },
+    [setNodes, setEdges]
+  );
+
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    const handle = window.setTimeout(() => {
+      reactFlowInstanceRef.current?.fitView({ padding: 0.2, duration: 400 });
+    }, 50);
+    return () => window.clearTimeout(handle);
+  }, [nodes, edges]);
+
+  const nodeMatchesSearch = useCallback((label: string, query: string) => {
+    if (!query) return false;
+    return label.toLowerCase().includes(query.toLowerCase());
+  }, []);
+
   const toggleNodeExpansion = useCallback((nodeId: string) => {
     setExpandedNodes((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(nodeId)) {
-        newSet.delete(nodeId);
+      const next = new Set(prev);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
       } else {
-        newSet.add(nodeId);
+        next.add(nodeId);
       }
-      return newSet;
+      return next;
     });
   }, []);
 
@@ -175,15 +662,12 @@ export const AccessVisualization = () => {
     roles.forEach((role) => {
       const policies = role.policies || [];
       policiesCount += policies.length;
-
       policies.forEach((policy) => {
         const endpoints = policy.endpoints || [];
         endpointsCount += endpoints.length;
-
         endpoints.forEach((endpoint) => {
           const actions = endpoint.page_actions || [];
           actionsCount += actions.length;
-
           actions.forEach((action) => {
             if (action.page) {
               const pageKey =
@@ -217,636 +701,615 @@ export const AccessVisualization = () => {
   const pageSummary = useMemo(() => {
     if (!pageAccessData) return null;
 
-    const actions = pageAccessData.actions || [];
-    const endpointsCount = actions.reduce(
-      (sum, action) => sum + (action.endpoint ? 1 : 0),
-      0
-    );
+    const countActions = (node: PageNode): number => {
+      let count = 0;
+      if (node.actions) count += node.actions.length;
+      if (node.children) {
+        node.children.forEach((child) => {
+          count += countActions(child);
+        });
+      }
+      return count;
+    };
 
-    const pageLabel = pageAccessData.page.route
-      ? `${pageAccessData.page.label} (${pageAccessData.page.route})`
-      : pageAccessData.page.label;
+    const countEndpoints = (node: PageNode): number => {
+      let count = 0;
+      if (node.actions) {
+        count += node.actions.filter((action) => action.endpoint || action.endpoint_details).length;
+      }
+      if (node.children) {
+        node.children.forEach((child) => {
+          count += countEndpoints(child);
+        });
+      }
+      return count;
+    };
+
+    const countPages = (node: PageNode): number => {
+      let count = 1;
+      if (node.children) {
+        node.children.forEach((child) => {
+          count += countPages(child);
+        });
+      }
+      return count;
+    };
+
+    const actionsCount = countActions(pageAccessData.pageNode);
+    const endpointsCount = countEndpoints(pageAccessData.pageNode);
+    const pagesCount = countPages(pageAccessData.pageNode);
+
+    const pageLabel = pageAccessData.pageNode.route
+      ? `${pageAccessData.pageNode.label} (${pageAccessData.pageNode.route})`
+      : pageAccessData.pageNode.label;
 
     return {
       pageLabel,
-      actionsLabel: summaryCountLabel(actions.length, 'action'),
+      actionsLabel: summaryCountLabel(actionsCount, 'action'),
       endpointsLabel: summaryCountLabel(endpointsCount, 'endpoint'),
+      pagesLabel: summaryCountLabel(pagesCount, 'page'),
     };
   }, [pageAccessData]);
 
-  // Fetch users and pages on mount
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchUsers = async () => {
       try {
-        const [usersRes, pagesRes] = await Promise.all([
-          api.users.getAll(),
-          api.uiPages.getAll(),
-        ]);
-        
-        console.log('Users response:', usersRes.data);
-        console.log('Pages response:', pagesRes.data);
-        
-        // Handle users response (assuming it's an array directly)
+        const usersRes = await api.users.getAll();
         setUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
-        
-        // Handle pages response (it's wrapped in a 'pages' property)
-        const pagesData = pagesRes.data?.pages || pagesRes.data;
-        setPages(Array.isArray(pagesData) ? pagesData : []);
+        setForbidden(false);
       } catch (err: any) {
-        console.error('Failed to fetch data:', err);
-        setError(err.response?.data?.message || 'Failed to load data');
+        console.error('Failed to fetch users:', err);
+        setError(err.response?.data?.message || 'Failed to load users');
+        if (err.response?.status === 403) setForbidden(true);
         setUsers([]);
-        setPages([]);
       }
     };
-    fetchData();
+    fetchUsers();
   }, []);
 
-  // Helper function to create clickable node with expand indicator
-  const createExpandableNode = useCallback((
-    id: string,
-    label: string,
-    position: { x: number; y: number },
-    style: any,
-    hasChildren: boolean,
-    isExpanded: boolean,
-    onNodeClick?: () => void
-  ): Node => {
-    const expandIndicator = hasChildren ? (isExpanded ? ' ▼' : ' ▶') : '';
-    return {
-      id,
-      data: { 
-        label: `${label}${expandIndicator}`,
-        onClick: onNodeClick 
-      },
-      position,
-      style: {
-        ...style,
-        cursor: hasChildren ? 'pointer' : 'default',
-        border: hasChildren ? '2px solid rgba(0,0,0,0.15)' : '1px solid rgba(0,0,0,0.1)',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      },
-      sourcePosition: Position.Bottom,
-      targetPosition: Position.Top,
-    };
-  }, []);
+  const buildUserAccessVisualization = useCallback(
+    (userData: ProcessedUserAccessData, expanded: Set<string>) => {
+      const nextNodes: Node<AccessNodeData>[] = [];
+      const nextEdges: Edge<AccessEdgeData>[] = [];
+      const userId = userData.id;
+      const roles = userData.roles || [];
 
-  // Build user access visualization with expand/collapse
-  const buildUserAccessVisualization = useCallback((userData: ProcessedUserAccessData, expanded: Set<string>) => {
-    const newNodes: Node[] = [];
-    const newEdges: Edge[] = [];
-    const userId = userData.id;
+      const hasSearch = !!searchQuery;
+      const matchesString = (value: string | undefined | null): boolean => {
+        if (!hasSearch || !value) return false;
+        return nodeMatchesSearch(value, searchQuery);
+      };
+      const matchesStrings = (...values: Array<string | undefined | null>) =>
+        values.some((value) => matchesString(value));
+      const matchesPage = (page?: { key?: string; label?: string; route?: string } | null): boolean =>
+        !!page && matchesStrings(page.label, page.route, page.key);
+      const matchesPageAction = (action?: UserAccessMatrixPageAction | null): boolean => {
+        if (!action) return false;
+        if (matchesStrings(action.label, action.action)) return true;
+        if (action.page && matchesPage(action.page)) return true;
+        return false;
+      };
+      const matchesEndpoint = (endpoint?: UserAccessMatrixEndpoint | null): boolean => {
+        if (!endpoint) return false;
+        if (matchesStrings(endpoint.service, endpoint.version, endpoint.method, endpoint.path, endpoint.description)) {
+          return true;
+        }
+        return (endpoint.page_actions || []).some((action) => matchesPageAction(action));
+      };
+      const matchesPolicy = (policy?: UserAccessMatrixPolicy | null): boolean => {
+        if (!policy) return false;
+        if (matchesStrings(policy.name, policy.description)) return true;
+        return (policy.endpoints || []).some((endpoint) => matchesEndpoint(endpoint));
+      };
+      const matchesRole = (role?: UserAccessMatrixRole | null): boolean => {
+        if (!role) return false;
+        if (matchesStrings(role.name, role.description)) return true;
+        return (role.policies || []).some((policy) => matchesPolicy(policy));
+      };
+      const matchesUser = (user?: ProcessedUserAccessData | null): boolean => {
+        if (!user) return false;
+        if (matchesStrings(user.username, user.fullName, user.email)) return true;
+        return (user.roles || []).some((role) => matchesRole(role));
+      };
 
-    // User node (root) - at the top center
-    const userNodeId = `user-${userId}`;
-    const roles = userData.roles || [];
-    const userDisplayName = userData.fullName
-      ? `${userData.fullName}\n(${userData.username})`
-      : userData.username;
+      const userDisplayName = userData.fullName
+        ? `${userData.fullName} (${userData.username})`
+        : userData.username;
 
-    newNodes.push(
-      createExpandableNode(
-        userNodeId,
-        userDisplayName,
-        { x: 400, y: 50 },
-        {
-          background: '#e6f7ff',
-          color: '#003a8c',
-          padding: '12px 24px',
-          borderRadius: '8px',
-          fontWeight: 'bold',
-          fontSize: '14px',
-          textAlign: 'center',
-          whiteSpace: 'pre-wrap',
-        },
-        roles.length > 0,
-        true,
-        undefined
-      )
-    );
-
-    // Roles nodes - horizontal row below user
-    const rolesCount = roles.length;
-    const roleSpacing = 250;
-    const roleStartX = 400 - ((rolesCount - 1) * roleSpacing) / 2;
-    
-    for (let i = 0; i < roles.length; i++) {
-      const role = roles[i];
-      const policies = role.policies || [];
-      const roleX = roleStartX + (i * roleSpacing);
-      const roleY = 200;
-      const roleNodeId = `role-${userId}-${i}`;
-      const isRoleExpanded = expanded.has(roleNodeId);
-      let roleEndpointTotal = 0;
-      let roleActionTotal = 0;
-      const rolePageKeys = new Set<string>();
-
-      policies.forEach((policy) => {
-        const endpoints = policy.endpoints || [];
-        roleEndpointTotal += endpoints.length;
-        endpoints.forEach((endpoint) => {
-          const actions = endpoint.page_actions || [];
-          roleActionTotal += actions.length;
-          actions.forEach((actionItem) => {
-            if (actionItem.page) {
-              const pageKey =
-                actionItem.page.key ||
-                actionItem.page.route ||
-                actionItem.page.label ||
-                actionItem.label ||
-                actionItem.action ||
-                '';
-              if (pageKey) rolePageKeys.add(pageKey);
-            }
-          });
-        });
-      });
-      const roleLabelParts: string[] = [];
-      const policyCountLabel = formatCountLabel(policies.length, 'policy');
-      if (policyCountLabel) roleLabelParts.push(policyCountLabel);
-      const endpointCountLabel = formatCountLabel(roleEndpointTotal, 'endpoint');
-      if (endpointCountLabel) roleLabelParts.push(endpointCountLabel);
-      const actionCountLabel = formatCountLabel(roleActionTotal, 'action');
-      if (actionCountLabel) roleLabelParts.push(actionCountLabel);
-      const pageCountLabel = formatCountLabel(rolePageKeys.size, 'page');
-      if (pageCountLabel) roleLabelParts.push(pageCountLabel);
-      const roleLabelDetails = roleLabelParts.length ? `\n(${roleLabelParts.join(', ')})` : '';
-
-      newNodes.push(
-        createExpandableNode(
-          roleNodeId,
-          `${role.name}${roleLabelDetails}`,
-          { x: roleX, y: roleY },
-          {
-            background: '#f6ffed',
-            color: '#135200',
-            padding: '10px 16px',
-            borderRadius: '6px',
-            fontSize: '13px',
-            textAlign: 'center',
-            minWidth: '180px',
-          },
-          policies.length > 0,
-          isRoleExpanded,
-          () => toggleNodeExpansion(roleNodeId)
-        )
+      nextNodes.push(
+        createAccessNode(`user-${userId}`, 'user', {
+          title: userDisplayName,
+          subtitle: userData.email,
+          badges: [
+            { text: summaryCountLabel(roles.length, 'role') },
+          ],
+          highlight: matchesUser(userData),
+        })
       );
 
-      newEdges.push({
-        id: `${userNodeId}-${roleNodeId}`,
-        source: userNodeId,
-        target: roleNodeId,
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: '#52c41a', strokeWidth: 2 },
-      });
-
-      // Only show policies if role is expanded
-      if (isRoleExpanded) {
-        const policiesCount = policies.length;
-        const policySpacing = 200;
-        const policyStartX = roleX - ((policiesCount - 1) * policySpacing) / 2;
-        
-        for (let j = 0; j < policies.length; j++) {
-          const policy = policies[j];
-          const endpoints = policy.endpoints || [];
-          const policyX = policyStartX + (j * policySpacing);
-          const policyY = 380;
-          const policyNodeId = `policy-${userId}-${i}-${j}`;
-          const isPolicyExpanded = expanded.has(policyNodeId);
-          
-          // Calculate total actions and unique pages across all endpoints in this policy
-          let totalActions = 0;
-          const uniquePolicyPages = new Set<string>();
-          endpoints.forEach((endpoint) => {
-            const actions = endpoint.page_actions || [];
-            totalActions += actions.length;
-            actions.forEach((actionItem) => {
-              if (actionItem.page) {
-                const pageKey =
-                  actionItem.page.key || actionItem.page.route || actionItem.page.label || actionItem.action;
-                uniquePolicyPages.add(pageKey);
+      roles.forEach((role, roleIndex) => {
+        const policies = role.policies || [];
+        const roleNodeId = `role-${userId}-${roleIndex}`;
+        const isRoleExpanded = expanded.has(roleNodeId);
+        let endpointCount = 0;
+        let actionCount = 0;
+        const uniquePages = new Set<string>();
+        policies.forEach((policy) => {
+          (policy.endpoints || []).forEach((endpoint) => {
+            endpointCount += 1;
+            (endpoint.page_actions || []).forEach((action) => {
+              actionCount += 1;
+              if (action.page) {
+                const key =
+                  action.page.key || action.page.route || action.page.label || action.label || action.action || '';
+                if (key) uniquePages.add(key);
               }
             });
           });
-          
-          const policyLabelParts: string[] = [];
-          const endpointCountLabel = formatCountLabel(endpoints.length, 'endpoint');
-          if (endpointCountLabel) policyLabelParts.push(endpointCountLabel);
-          const actionsCountLabel = formatCountLabel(totalActions, 'action');
-          if (actionsCountLabel) policyLabelParts.push(actionsCountLabel);
-          const pagesCountLabel = formatCountLabel(uniquePolicyPages.size, 'page');
-          if (pagesCountLabel) policyLabelParts.push(pagesCountLabel);
-          const policyLabelDetails = policyLabelParts.length ? `\n(${policyLabelParts.join(', ')})` : '';
+        });
 
-          newNodes.push(
-            createExpandableNode(
-              policyNodeId,
-              `${policy.name}${policyLabelDetails}`,
-              { x: policyX, y: policyY },
-              {
-                background: '#fff7e6',
-                color: '#ad6800',
-                padding: '8px 14px',
-                borderRadius: '5px',
-                fontSize: '12px',
-                textAlign: 'center',
-                minWidth: '160px',
-              },
-              endpoints.length > 0,
-              isPolicyExpanded,
-              () => toggleNodeExpansion(policyNodeId)
-            )
-          );
+        nextNodes.push(
+          createAccessNode(roleNodeId, 'role', {
+            title: role.name,
+            description: role.description,
+            badges: [
+              { text: formatCountLabel(policies.length, 'policy') },
+              { text: formatCountLabel(endpointCount, 'endpoint') },
+              { text: formatCountLabel(actionCount, 'action') },
+              { text: formatCountLabel(uniquePages.size, 'page') },
+            ].filter((badge) => badge.text),
+            highlight: matchesRole(role),
+            collapsible: policies.length > 0,
+            isExpanded: isRoleExpanded,
+            onToggle: () => toggleNodeExpansion(roleNodeId),
+          })
+        );
 
-          newEdges.push({
-            id: `${roleNodeId}-${policyNodeId}`,
-            source: roleNodeId,
-            target: policyNodeId,
+        nextEdges.push(
+          createAccessEdge(`edge-user-role-${userId}-${roleIndex}`, `user-${userId}`, roleNodeId, {
+            label: 'Assigned Role',
+            color: '#52c41a',
             animated: true,
-            markerEnd: { type: MarkerType.ArrowClosed },
-            style: { stroke: '#faad14', strokeWidth: 2 },
-          });
+            highlight: matchesUser(userData) && matchesRole(role),
+          })
+        );
 
-          // Only show endpoints if policy is expanded
-          if (isPolicyExpanded) {
-            const endpointsCount = endpoints.length;
-            const endpointSpacing = 180;
-            const endpointStartX = policyX - ((endpointsCount - 1) * endpointSpacing) / 2;
-            
-            for (let k = 0; k < endpoints.length; k++) {
-              const endpoint = endpoints[k];
+        if (isRoleExpanded) {
+          policies.forEach((policy, policyIndex) => {
+            const policyNodeId = `policy-${userId}-${roleIndex}-${policyIndex}`;
+            const endpoints = policy.endpoints || [];
+            const isPolicyExpanded = expanded.has(policyNodeId);
+            let totalActions = 0;
+            const uniquePolicyPages = new Set<string>();
+            endpoints.forEach((endpoint) => {
               const actions = endpoint.page_actions || [];
-              const endpointX = endpointStartX + (k * endpointSpacing);
-              const endpointY = 560;
-              const endpointNodeId = `endpoint-${userId}-${i}-${j}-${k}`;
-              const isEndpointExpanded = expanded.has(endpointNodeId);
-              const endpointLabelParts: string[] = [];
-              const actionsCountLabel = formatCountLabel(actions.length, 'action');
-              if (actionsCountLabel) endpointLabelParts.push(actionsCountLabel);
-              const uniquePageKeys = new Set<string>();
+              totalActions += actions.length;
               actions.forEach((actionItem) => {
                 if (actionItem.page) {
                   const pageKey =
                     actionItem.page.key || actionItem.page.route || actionItem.page.label || actionItem.action;
-                  uniquePageKeys.add(pageKey);
+                  if (pageKey) uniquePolicyPages.add(pageKey);
                 }
               });
-              const pageCountLabel = formatCountLabel(uniquePageKeys.size, 'page');
-              if (pageCountLabel) endpointLabelParts.push(pageCountLabel);
-              const endpointLabelSuffix = endpointLabelParts.length ? `\n(${endpointLabelParts.join(', ')})` : '';
-              const endpointLabel = `${endpoint.method}\n${endpoint.path}${endpointLabelSuffix}`;
+            });
 
-              newNodes.push(
-                createExpandableNode(
-                  endpointNodeId,
-                  endpointLabel,
-                  { x: endpointX, y: endpointY },
-                  {
-                    background: '#fff1f0',
-                    color: '#a8071a',
-                    padding: '6px 12px',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    textAlign: 'center',
-                    maxWidth: '160px',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                    minWidth: '140px',
-                  },
-                  actions.length > 0,
-                  isEndpointExpanded,
-                  actions.length > 0 ? () => toggleNodeExpansion(endpointNodeId) : undefined
-                )
-              );
+            nextNodes.push(
+              createAccessNode(policyNodeId, 'policy', {
+                title: policy.name,
+                description: policy.description,
+                badges: [
+                  { text: formatCountLabel(endpoints.length, 'endpoint') },
+                  { text: formatCountLabel(totalActions, 'action') },
+                  { text: formatCountLabel(uniquePolicyPages.size, 'page') },
+                ].filter((badge) => badge.text),
+                highlight: matchesPolicy(policy),
+                collapsible: endpoints.length > 0,
+                isExpanded: isPolicyExpanded,
+                onToggle: () => toggleNodeExpansion(policyNodeId),
+              })
+            );
 
-              newEdges.push({
-                id: `${policyNodeId}-${endpointNodeId}`,
-                source: policyNodeId,
-                target: endpointNodeId,
-                markerEnd: { type: MarkerType.ArrowClosed },
-                style: { stroke: '#ff4d4f', strokeWidth: 1 },
-              });
+            nextEdges.push(
+              createAccessEdge(
+                `edge-role-policy-${userId}-${roleIndex}-${policyIndex}`,
+                roleNodeId,
+                policyNodeId,
+                {
+                  label: 'Includes Policy',
+                  color: '#faad14',
+                  animated: true,
+                  highlight: matchesRole(role) && matchesPolicy(policy),
+                }
+              )
+            );
 
-              // Only show page actions if endpoint is expanded
-              if (isEndpointExpanded && actions.length > 0) {
-                const actionsCount = actions.length;
-                const actionSpacing = 160;
-                const actionStartX = endpointX - ((actionsCount - 1) * actionSpacing) / 2;
+            if (isPolicyExpanded) {
+              endpoints.forEach((endpoint, endpointIndex) => {
+                const endpointNodeId = `endpoint-${userId}-${roleIndex}-${policyIndex}-${endpointIndex}`;
+                const actions = endpoint.page_actions || [];
+                const isEndpointExpanded = expanded.has(endpointNodeId);
+                const endpointHighlight = matchesEndpoint(endpoint);
 
-                for (let m = 0; m < actions.length; m++) {
-                  const action = actions[m];
-                  const actionX = actionStartX + (m * actionSpacing);
-                  const actionY = 740;
-                  const actionNodeId = `page-action-${userId}-${i}-${j}-${k}-${m}`;
-                  const actionLabelBase = action.label || action.action || 'Action';
-                  const actionPages = action.page ? [action.page] : [];
-                  const actionPageCountLabel = formatCountLabel(actionPages.length, 'page');
-                  const actionLabelSuffix = actionPageCountLabel ? `\n(${actionPageCountLabel})` : '';
-                  const actionLabel = `${actionLabelBase}${actionLabelSuffix}`;
-                  const actionHasChildren = actionPages.length > 0;
-                  const isActionExpanded = expanded.has(actionNodeId);
+                const endpointBadges: NodeBadge[] = [];
+                const actionCountLabel = formatCountLabel(actions.length, 'action');
+                if (actionCountLabel) endpointBadges.push({ text: actionCountLabel });
+                if (endpoint.service) endpointBadges.push({ text: endpoint.service, color: '#a8071a' });
 
-                  newNodes.push(
-                    createExpandableNode(
-                      actionNodeId,
-                      actionLabel,
-                      { x: actionX, y: actionY },
-                      {
-                        background: '#e6fffb',
-                        color: '#006d75',
-                        padding: '6px 12px',
-                        borderRadius: '4px',
-                        fontSize: '11px',
-                        textAlign: 'center',
-                        maxWidth: '160px',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        minWidth: '140px',
-                      },
-                      actionHasChildren,
-                      isActionExpanded,
-                      actionHasChildren ? () => toggleNodeExpansion(actionNodeId) : undefined
-                    )
-                  );
+                nextNodes.push(
+                  createAccessNode(endpointNodeId, 'endpoint', {
+                    title: endpoint.method,
+                    subtitle: endpoint.path,
+                    description: endpoint.description,
+                    badges: endpointBadges,
+                    highlight: endpointHighlight,
+                    collapsible: actions.length > 0,
+                    isExpanded: isEndpointExpanded,
+                    onToggle: actions.length > 0 ? () => toggleNodeExpansion(endpointNodeId) : undefined,
+                  })
+                );
 
-                  newEdges.push({
-                    id: `${endpointNodeId}-${actionNodeId}`,
-                    source: endpointNodeId,
-                    target: actionNodeId,
-                    markerEnd: { type: MarkerType.ArrowClosed },
-                    style: { stroke: '#597ef7', strokeWidth: 1 },
-                  });
+                nextEdges.push(
+                  createAccessEdge(
+                    `edge-policy-endpoint-${userId}-${roleIndex}-${policyIndex}-${endpointIndex}`,
+                    policyNodeId,
+                    endpointNodeId,
+                    {
+                      label: 'Grants Endpoint',
+                      color: '#ff7875',
+                      highlight: matchesPolicy(policy) && endpointHighlight,
+                    }
+                  )
+                );
 
-                  if (isActionExpanded && actionPages.length > 0) {
-                    const pageSpacing = 140;
-                    const pageStartX = actionX - ((actionPages.length - 1) * pageSpacing) / 2;
+                if (isEndpointExpanded && actions.length > 0) {
+                  actions.forEach((action, actionIndex) => {
+                    const actionNodeId = `page-action-${userId}-${roleIndex}-${policyIndex}-${endpointIndex}-${actionIndex}`;
+                    const actionPages = action.page ? [action.page] : [];
+                    const isActionExpanded = expanded.has(actionNodeId);
+                    const actionHighlight = matchesPageAction(action);
 
-                    for (let n = 0; n < actionPages.length; n++) {
-                      const page = actionPages[n];
-                      const pageX = pageStartX + (n * pageSpacing);
-                      const pageY = 920;
-                      const pageNodeId = `user-page-${userId}-${i}-${j}-${k}-${m}-${n}`;
-                      const pageLabelBase = page.label || page.key || page.route || 'Page';
-                      const pageRoute = page.route ? `\n${page.route}` : '';
-                      const pageLabel = `${pageLabelBase}${pageRoute}`;
+                    nextNodes.push(
+                      createAccessNode(actionNodeId, 'action', {
+                        title: action.label || action.action || 'Action',
+                        subtitle: action.action,
+                        badges: [{ text: formatCountLabel(actionPages.length, 'page') }].filter(
+                          (badge) => badge.text
+                        ),
+                        highlight: actionHighlight,
+                        collapsible: actionPages.length > 0,
+                        isExpanded: isActionExpanded,
+                        onToggle: actionPages.length > 0 ? () => toggleNodeExpansion(actionNodeId) : undefined,
+                      })
+                    );
 
-                      newNodes.push(
-                        createExpandableNode(
-                          pageNodeId,
-                          pageLabel,
-                          { x: pageX, y: pageY },
-                          {
-                            background: '#f9f0ff',
-                            color: '#531dab',
-                            padding: '6px 12px',
-                            borderRadius: '4px',
-                            fontSize: '11px',
-                            textAlign: 'center',
-                            maxWidth: '160px',
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                            minWidth: '140px',
-                          },
-                          false,
-                          false,
-                          undefined
-                        )
-                      );
+                    nextEdges.push(
+                      createAccessEdge(
+                        `edge-endpoint-action-${userId}-${roleIndex}-${policyIndex}-${endpointIndex}-${actionIndex}`,
+                        endpointNodeId,
+                        actionNodeId,
+                        {
+                          label: 'Enables Action',
+                          color: '#597ef7',
+                          highlight: endpointHighlight && actionHighlight,
+                        }
+                      )
+                    );
 
-                      newEdges.push({
-                        id: `${actionNodeId}-${pageNodeId}`,
-                        source: actionNodeId,
-                        target: pageNodeId,
-                        markerEnd: { type: MarkerType.ArrowClosed },
-                        style: { stroke: '#722ed1', strokeWidth: 1 },
+                    if (isActionExpanded && actionPages.length > 0) {
+                      actionPages.forEach((page, pageIndex) => {
+                        const pageNodeId = `user-page-${userId}-${roleIndex}-${policyIndex}-${endpointIndex}-${actionIndex}-${pageIndex}`;
+                        const pageLabelBase = page.label || page.key || page.route || 'Page';
+                        const pageRoute = page.route ? page.route : undefined;
+                        const pageHighlight = matchesPage(page);
+
+                        nextNodes.push(
+                          createAccessNode(pageNodeId, 'page', {
+                            title: pageLabelBase,
+                            subtitle: pageRoute,
+                            highlight: pageHighlight,
+                          })
+                        );
+
+                        nextEdges.push(
+                          createAccessEdge(
+                            `edge-action-page-${userId}-${roleIndex}-${policyIndex}-${endpointIndex}-${actionIndex}-${pageIndex}`,
+                            actionNodeId,
+                            pageNodeId,
+                            {
+                              label: 'References Page',
+                              color: '#9254de',
+                              highlight: actionHighlight && pageHighlight,
+                            }
+                          )
+                        );
                       });
                     }
-                  }
+                  });
                 }
-              }
+              });
             }
-          }
+          });
         }
-      }
-    }
-
-    setNodes(newNodes);
-    setEdges(newEdges);
-  }, [createExpandableNode, toggleNodeExpansion, setNodes, setEdges]);
-
-  // Build user access map (main entry point)
-  const buildUserAccessMap = useCallback(async (userId: number) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      // Fetch user access matrix
-      const matrixRes = await api.meta.getUserAccessMatrix(userId);
-      const matrixData: UserAccessMatrixResponse = matrixRes.data;
-
-      // Check if we have role data
-      if (!matrixData.roles || matrixData.roles.length === 0) {
-        setError('No access data found for this user');
-        setNodes([]);
-        setEdges([]);
-        setUserAccessData(null);
-        setLoading(false);
-        return;
-      }
-
-      const selectedUserMeta = users.find((user) => user.id === userId);
-      const processedData: ProcessedUserAccessData = {
-        id: userId,
-        username: selectedUserMeta?.username || `User ${userId}`,
-        fullName: selectedUserMeta?.fullName,
-        roles: matrixData.roles,
-      };
-
-      setUserAccessData(processedData);
-      
-      // Initially all nodes are collapsed (empty set)
-      const initialExpanded = new Set<string>();
-      setExpandedNodes(initialExpanded);
-      
-      buildUserAccessVisualization(processedData, initialExpanded);
-    } catch (err: any) {
-      console.error('Failed to build user access map:', err);
-      setError(err.response?.data?.message || 'Failed to build access map');
-      setUserAccessData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [buildUserAccessVisualization, setNodes, setEdges, setUserAccessData, setExpandedNodes, users]);
-
-  // Build page access visualization with expand/collapse
-  const buildPageAccessVisualization = useCallback((pageData: ProcessedPageAccessData, expanded: Set<string>) => {
-    const newNodes: Node[] = [];
-    const newEdges: Edge[] = [];
-    const pageId = pageData.pageId;
-    const actions = pageData.actions || [];
-    const pageLabel = pageData.page.route
-      ? `${pageData.page.label}\n${pageData.page.route}`
-      : pageData.page.label;
-
-    // Page node (root) - at the top center
-    const pageNodeId = `page-${pageId}`;
-    newNodes.push(
-      createExpandableNode(
-        pageNodeId,
-        pageLabel,
-        { x: 400, y: 50 },
-        {
-          background: '#f9f0ff',
-          color: '#531dab',
-          padding: '12px 24px',
-          borderRadius: '8px',
-          fontWeight: 'bold',
-          fontSize: '14px',
-          textAlign: 'center',
-          whiteSpace: 'pre-wrap',
-        },
-        actions.length > 0,
-        true,
-        undefined
-      )
-    );
-
-    // Actions nodes - horizontal row below page
-    const actionsCount = actions.length;
-    const actionSpacing = 220;
-    const actionStartX = 400 - ((actionsCount - 1) * actionSpacing) / 2;
-    
-    for (let i = 0; i < actions.length; i++) {
-      const action = actions[i];
-      const actionX = actionStartX + (i * actionSpacing);
-      const actionY = 200;
-      const actionNodeId = `action-${pageId}-${i}`;
-      const isActionExpanded = expanded.has(actionNodeId);
-      const actionLabelBase = action.label || action.action || 'Action';
-      const actionDetail = action.action ? `\n(${action.action})` : '';
-      const actionHasEndpoint = !!action.endpoint;
-      const endpointCountLabel = actionHasEndpoint ? '\n(1 endpoint)' : '';
-      const actionLabel = `${actionLabelBase}${actionDetail}${endpointCountLabel}`;
-
-      newNodes.push(
-        createExpandableNode(
-          actionNodeId,
-          actionLabel,
-          { x: actionX, y: actionY },
-          {
-            background: '#e6fffb',
-            color: '#006d75',
-            padding: '10px 16px',
-            borderRadius: '6px',
-            fontSize: '13px',
-            textAlign: 'center',
-            minWidth: '160px',
-          },
-          !!action.endpoint,
-          isActionExpanded,
-          () => toggleNodeExpansion(actionNodeId)
-        )
-      );
-
-      newEdges.push({
-        id: `${pageNodeId}-${actionNodeId}`,
-        source: pageNodeId,
-        target: actionNodeId,
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: '#13c2c2', strokeWidth: 2 },
       });
 
-      // Only show endpoint if action is expanded
-      if (isActionExpanded && action.endpoint) {
-        const endpoint = action.endpoint;
-        const endpointNodeId = `endpoint-${pageId}-${i}`;
-        const endpointLabel = `${endpoint.method}\n${endpoint.path}\n(1 action)`;
+      applyGraph(nextNodes, nextEdges);
+    },
+    [applyGraph, nodeMatchesSearch, searchQuery, toggleNodeExpansion]
+  );
 
-        newNodes.push(
-          createExpandableNode(
-            endpointNodeId,
-            endpointLabel,
-            { x: actionX, y: 380 },
-            {
-              background: '#fff1f0',
-              color: '#a8071a',
-              padding: '8px 14px',
-              borderRadius: '4px',
-              fontSize: '12px',
-              textAlign: 'center',
-              maxWidth: '200px',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              minWidth: '140px',
-            },
-            false,
-            false,
-            undefined
-          )
+  const buildPageAccessVisualization = useCallback(
+    (pageData: ProcessedPageAccessData, expanded: Set<string>) => {
+      const nextNodes: Node<AccessNodeData>[] = [];
+      const nextEdges: Edge<AccessEdgeData>[] = [];
+
+      const matchesSearchValue = (value?: string) => !!searchQuery && !!value && nodeMatchesSearch(value, searchQuery);
+
+      const buildNode = (node: PageNode, parentId: string | null) => {
+        const nodeId = `page-${node.id}`;
+        const isExpanded = expanded.has(nodeId);
+        const hasChildren = !!(node.children && node.children.length > 0);
+        const hasActions = !!(node.actions && node.actions.length > 0);
+        const highlight =
+          matchesSearchValue(node.label) ||
+          matchesSearchValue(node.route) ||
+          (node.actions || []).some(
+            (action) =>
+              matchesSearchValue(action.label) ||
+              matchesSearchValue(action.action) ||
+              matchesSearchValue(action.endpoint)
+          );
+
+        nextNodes.push(
+          createAccessNode(nodeId, 'page', {
+            title: node.label,
+            subtitle: node.route,
+            badges: [
+              { text: formatCountLabel(node.actions?.length ?? 0, 'action') },
+              { text: formatCountLabel(node.children?.length ?? 0, 'child') },
+            ].filter((badge) => badge.text),
+            highlight,
+            collapsible: hasChildren || hasActions,
+            isExpanded,
+            onToggle: hasChildren || hasActions ? () => toggleNodeExpansion(nodeId) : undefined,
+          })
         );
 
-        newEdges.push({
-          id: `${actionNodeId}-${endpointNodeId}`,
-          source: actionNodeId,
-          target: endpointNodeId,
-          markerEnd: { type: MarkerType.ArrowClosed },
-          style: { stroke: '#ff4d4f', strokeWidth: 1 },
-        });
-      }
-    }
+        if (parentId) {
+          nextEdges.push(
+            createAccessEdge(`edge-${parentId}-${nodeId}`, parentId, nodeId, {
+              label: 'Child Page',
+              color: '#b37feb',
+              highlight,
+            })
+          );
+        }
 
-    setNodes(newNodes);
-    setEdges(newEdges);
-  }, [createExpandableNode, toggleNodeExpansion, setNodes, setEdges]);
+        if (isExpanded && node.actions) {
+          node.actions.forEach((action, actionIndex) => {
+            const actionNodeId = `page-action-${node.id}-${actionIndex}`;
+            const hasEndpoint = !!(action.endpoint || action.endpoint_details);
+            const actionHighlight =
+              matchesSearchValue(action.label) ||
+              matchesSearchValue(action.action) ||
+              matchesSearchValue(action.endpoint);
 
-  // Build page access map (main entry point)
-  const buildPageAccessMap = useCallback(async (pageId: number) => {
-    setLoading(true);
-    setError(null);
+            nextNodes.push(
+              createAccessNode(actionNodeId, 'action', {
+                title: action.label || action.action || 'Action',
+                subtitle: action.action,
+                badges: hasEndpoint ? [{ text: 'Endpoint' }] : undefined,
+                highlight: actionHighlight,
+                collapsible: hasEndpoint,
+                isExpanded: expanded.has(actionNodeId),
+                onToggle: hasEndpoint ? () => toggleNodeExpansion(actionNodeId) : undefined,
+              })
+            );
 
-    try {
-      // Fetch UI access matrix for the page
-      const matrixRes = await api.meta.getUiAccessMatrix(pageId);
-      const matrixData: UiAccessMatrixResponse = matrixRes.data;
+            nextEdges.push(
+              createAccessEdge(`edge-${nodeId}-${actionNodeId}`, nodeId, actionNodeId, {
+                label: 'Has Action',
+                color: '#13c2c2',
+                highlight: highlight && actionHighlight,
+              })
+            );
 
-      // Check if we have page data
-      if (!matrixData.page) {
-        setError('No access data found for this page');
-        setNodes([]);
-        setEdges([]);
-        setPageAccessData(null);
-        setLoading(false);
-        return;
-      }
+            if (hasEndpoint && expanded.has(actionNodeId)) {
+              const endpointNodeId = `endpoint-${node.id}-${actionIndex}`;
+              const formatted = formatEndpointNodeLabel(action.endpoint_details, action.endpoint);
+              const endpointHighlight = matchesSearchValue(formatted.title) || matchesSearchValue(formatted.subtitle);
 
-      const processedPageData: ProcessedPageAccessData = {
-        pageId: matrixData.page_id,
-        page: matrixData.page,
-        actions: matrixData.actions || [],
+              nextNodes.push(
+                createAccessNode(endpointNodeId, 'endpoint', {
+                  title: formatted.title,
+                  subtitle: formatted.subtitle,
+                  highlight: endpointHighlight,
+                })
+              );
+
+              nextEdges.push(
+                createAccessEdge(`edge-${actionNodeId}-${endpointNodeId}`, actionNodeId, endpointNodeId, {
+                  label: 'Calls Endpoint',
+                  color: '#ff7875',
+                  highlight: actionHighlight && endpointHighlight,
+                })
+              );
+            }
+          });
+        }
+
+        if (isExpanded && node.children) {
+          node.children.forEach((child) => buildNode(child, nodeId));
+        }
       };
 
-      setPageAccessData(processedPageData);
-      
-      // Initially all nodes are collapsed (empty set)
-      const initialExpanded = new Set<string>();
-      setExpandedNodes(initialExpanded);
-      
-      buildPageAccessVisualization(processedPageData, initialExpanded);
-    } catch (err: any) {
-      console.error('Failed to build page access map:', err);
-      setError(err.response?.data?.message || 'Failed to build page access map');
-      setPageAccessData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [buildPageAccessVisualization, setNodes, setEdges, setPageAccessData, setExpandedNodes]);
+      buildNode(pageData.pageNode, null);
+      applyGraph(nextNodes, nextEdges);
+    },
+    [applyGraph, nodeMatchesSearch, searchQuery, toggleNodeExpansion]
+  );
 
-  // Rebuild visualization when expanded nodes or data change
+  const buildAllPagesVisualization = useCallback(
+    (allPages: PageNode[], expanded: Set<string>) => {
+      const nextNodes: Node<AccessNodeData>[] = [];
+      const nextEdges: Edge<AccessEdgeData>[] = [];
+
+      const matchesSearchValue = (value?: string) => !!searchQuery && !!value && nodeMatchesSearch(value, searchQuery);
+
+      const subtreeMatchesSearch = (node: PageNode): boolean => {
+        if (matchesSearchValue(node.label) || matchesSearchValue(node.route)) return true;
+        if (
+          node.actions &&
+          node.actions.some(
+            (action) =>
+              matchesSearchValue(action.label) ||
+              matchesSearchValue(action.action) ||
+              matchesSearchValue(action.endpoint)
+          )
+        ) {
+          return true;
+        }
+        if (node.children && node.children.some((child) => subtreeMatchesSearch(child))) return true;
+        return false;
+      };
+
+      const buildNode = (node: PageNode, parentId: string | null) => {
+        const nodeId = `page-${node.id}`;
+        const isExpanded = expanded.has(nodeId);
+        const hasChildren = !!(node.children && node.children.length > 0);
+        const hasActions = !!(node.actions && node.actions.length > 0);
+        const highlight = subtreeMatchesSearch(node);
+
+        nextNodes.push(
+          createAccessNode(nodeId, 'page', {
+            title: node.label,
+            subtitle: node.route,
+            badges: [
+              { text: formatCountLabel(node.actions?.length ?? 0, 'action') },
+              { text: formatCountLabel(node.children?.length ?? 0, 'child') },
+            ].filter((badge) => badge.text),
+            highlight,
+            collapsible: hasChildren || hasActions,
+            isExpanded,
+            onToggle: hasChildren || hasActions ? () => toggleNodeExpansion(nodeId) : undefined,
+          })
+        );
+
+        if (parentId) {
+          nextEdges.push(
+            createAccessEdge(`edge-${parentId}-${nodeId}`, parentId, nodeId, {
+              label: 'Child Page',
+              color: '#b37feb',
+              highlight,
+            })
+          );
+        }
+
+        if (isExpanded && node.actions) {
+          node.actions.forEach((action, actionIndex) => {
+            const actionNodeId = `page-action-${node.id}-${actionIndex}`;
+            const hasEndpoint = !!(action.endpoint || action.endpoint_details);
+            const actionHighlight =
+              matchesSearchValue(action.label) ||
+              matchesSearchValue(action.action) ||
+              matchesSearchValue(action.endpoint);
+
+            nextNodes.push(
+              createAccessNode(actionNodeId, 'action', {
+                title: action.label || action.action || 'Action',
+                subtitle: action.action,
+                badges: hasEndpoint ? [{ text: 'Endpoint' }] : undefined,
+                highlight: actionHighlight,
+                collapsible: hasEndpoint,
+                isExpanded: expanded.has(actionNodeId),
+                onToggle: hasEndpoint ? () => toggleNodeExpansion(actionNodeId) : undefined,
+              })
+            );
+
+            nextEdges.push(
+              createAccessEdge(`edge-${nodeId}-${actionNodeId}`, nodeId, actionNodeId, {
+                label: 'Has Action',
+                color: '#13c2c2',
+                highlight: highlight && actionHighlight,
+              })
+            );
+
+            if (hasEndpoint && expanded.has(actionNodeId)) {
+              const endpointNodeId = `endpoint-${node.id}-${actionIndex}`;
+              const formatted = formatEndpointNodeLabel(action.endpoint_details, action.endpoint);
+              const endpointHighlight = matchesSearchValue(formatted.title) || matchesSearchValue(formatted.subtitle);
+
+              nextNodes.push(
+                createAccessNode(endpointNodeId, 'endpoint', {
+                  title: formatted.title,
+                  subtitle: formatted.subtitle,
+                  highlight: endpointHighlight,
+                })
+              );
+
+              nextEdges.push(
+                createAccessEdge(`edge-${actionNodeId}-${endpointNodeId}`, actionNodeId, endpointNodeId, {
+                  label: 'Calls Endpoint',
+                  color: '#ff7875',
+                  highlight: actionHighlight && endpointHighlight,
+                })
+              );
+            }
+          });
+        }
+
+        if (isExpanded && node.children) {
+          node.children.forEach((child) => buildNode(child, nodeId));
+        }
+      };
+
+      allPages.forEach((page) => buildNode(page, null));
+      applyGraph(nextNodes, nextEdges);
+    },
+    [applyGraph, nodeMatchesSearch, searchQuery, toggleNodeExpansion]
+  );
+
   useEffect(() => {
-    if (viewType === 'user' && userAccessData && selectedUser) {
+    if (viewType !== 'page') return;
+
+    const fetchUiPages = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const matrixRes = await api.meta.getAllUiAccessMatrix();
+        const matrixData: UiAccessMatrixResponse = matrixRes.data;
+        const normalizedPages = normalizePageNodes(matrixData.pages);
+
+        if (normalizedPages.length > 0) {
+          const initialExpanded = new Set<string>();
+          setUiPages(normalizedPages);
+          setExpandedNodes(initialExpanded);
+          buildAllPagesVisualization(normalizedPages, initialExpanded);
+          setForbidden(false);
+        } else {
+          setUiPages([]);
+          setNodes([]);
+          setEdges([]);
+        }
+      } catch (err: any) {
+        console.error('Failed to fetch UI pages:', err);
+        setError(err.response?.data?.message || 'Failed to load UI pages');
+        if (err.response?.status === 403) setForbidden(true);
+        setUiPages([]);
+        setNodes([]);
+        setEdges([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchUiPages();
+  }, [viewType, buildAllPagesVisualization, setEdges, setNodes, setExpandedNodes]);
+
+  useEffect(() => {
+    if (viewType === 'user' && userAccessData && selectedUser !== null) {
       buildUserAccessVisualization(userAccessData, expandedNodes);
+    } else if (viewType === 'page' && !selectedPage && uiPages.length > 0) {
+      buildAllPagesVisualization(uiPages, expandedNodes);
     } else if (viewType === 'page' && pageAccessData && selectedPage) {
       buildPageAccessVisualization(pageAccessData, expandedNodes);
     }
@@ -859,25 +1322,95 @@ export const AccessVisualization = () => {
     pageAccessData,
     selectedPage,
     buildPageAccessVisualization,
+    uiPages,
+    buildAllPagesVisualization,
   ]);
 
-  // Handle user selection
+  const buildUserAccessMap = useCallback(
+    async (userId: number) => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const matrixRes = await api.meta.getUserAccessMatrix(userId);
+        const matrixData: UserAccessMatrixResponse = matrixRes.data;
+
+        if (!matrixData.roles || matrixData.roles.length === 0) {
+          setError('No access data found for this user');
+          setNodes([]);
+          setEdges([]);
+          setUserAccessData(null);
+          setLoading(false);
+          return;
+        }
+
+        const selectedUserMeta = users.find((user) => user.id === userId);
+        const processedData: ProcessedUserAccessData = {
+          id: userId,
+          username: selectedUserMeta?.username || `User ${userId}`,
+          fullName: selectedUserMeta?.fullName,
+          email: selectedUserMeta?.email,
+          roles: matrixData.roles,
+        };
+
+        setUserAccessData(processedData);
+        const initialExpanded = new Set<string>([`user-${userId}`]);
+        setExpandedNodes(initialExpanded);
+        buildUserAccessVisualization(processedData, initialExpanded);
+        setForbidden(false);
+      } catch (err: any) {
+        console.error('Failed to build user access map:', err);
+        setError(err.response?.data?.message || 'Failed to build access map');
+        if (err.response?.status === 403) setForbidden(true);
+        setUserAccessData(null);
+        setNodes([]);
+        setEdges([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [buildUserAccessVisualization, setEdges, setNodes, users]
+  );
+
+  const buildPageAccessMap = useCallback(
+    (pageId: number, pages: PageNode[]) => {
+      setLoading(true);
+      setError(null);
+
+      const selectedPageNode = findPageById(pages, pageId);
+
+      if (!selectedPageNode) {
+        setError('Page not found in visualization');
+        setLoading(false);
+        return;
+      }
+
+      const processedData: ProcessedPageAccessData = {
+        pageId,
+        pageNode: selectedPageNode,
+        allPages: pages,
+      };
+
+      setPageAccessData(processedData);
+      const initialExpanded = new Set<string>([`page-${pageId}`]);
+      setExpandedNodes(initialExpanded);
+      buildPageAccessVisualization(processedData, initialExpanded);
+      setForbidden(false);
+      setLoading(false);
+    },
+    [buildPageAccessVisualization]
+  );
+
   const handleUserChange = (userId: number) => {
     setSelectedUser(userId);
     setSelectedPage(null);
     setPageAccessData(null);
+    setUiPages([]);
+    setSearchQuery('');
+    setForbidden(false);
     buildUserAccessMap(userId);
   };
 
-  // Handle page selection
-  const handlePageChange = (pageId: number) => {
-    setSelectedPage(pageId);
-    setSelectedUser(null);
-    setUserAccessData(null);
-    buildPageAccessMap(pageId);
-  };
-
-  // Clear visualization
   const handleClear = () => {
     setSelectedUser(null);
     setSelectedPage(null);
@@ -886,13 +1419,13 @@ export const AccessVisualization = () => {
     setExpandedNodes(new Set());
     setUserAccessData(null);
     setPageAccessData(null);
+    setUiPages([]);
+    setSearchQuery('');
+    setForbidden(false);
   };
 
-  // Handle node click for expand/collapse
-  const handleNodeClick = useCallback((_event: any, node: Node) => {
-    if (node.data.onClick) {
-      node.data.onClick();
-    }
+  const handleNodeDoubleClick = useCallback((_event: any, node: Node<AccessNodeData>) => {
+    node.data.onToggle?.();
   }, []);
 
   return (
@@ -900,12 +1433,26 @@ export const AccessVisualization = () => {
       <Title level={2}>Access Visualization</Title>
       <Card style={{ marginBottom: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }} size="large">
-          <Space wrap>
+          <Space wrap align="center">
             <Select
               style={{ width: 200 }}
               placeholder="Select View Type"
               value={viewType}
-              onChange={setViewType}
+              onChange={(value) => {
+                setViewType(value);
+                setNodes([]);
+                setEdges([]);
+                setExpandedNodes(new Set());
+                setSearchQuery('');
+                setForbidden(false);
+                if (value === 'user') {
+                  setSelectedPage(null);
+                  setUiPages([]);
+                } else {
+                  setSelectedUser(null);
+                  setUserAccessData(null);
+                }
+              }}
             >
               <Option value="user">User Access Flow</Option>
               <Option value="page">UI Page Flow</Option>
@@ -914,7 +1461,7 @@ export const AccessVisualization = () => {
             {viewType === 'user' && (
               <Select
                 showSearch
-                style={{ width: 300 }}
+                style={{ width: 320 }}
                 placeholder="Select a user"
                 value={selectedUser}
                 onChange={handleUserChange}
@@ -922,33 +1469,55 @@ export const AccessVisualization = () => {
                   (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
                 }
                 optionFilterProp="children"
+                allowClear
+                onClear={handleClear}
               >
-                {users && Array.isArray(users) && users.map(user => (
-                  <Option key={user.id} value={user.id}>
-                    {user.fullName} ({user.username})
+                {users &&
+                  Array.isArray(users) &&
+                  users.map((user) => (
+                    <Option key={user.id} value={user.id}>
+                      {user.fullName} ({user.username})
+                    </Option>
+                  ))}
+              </Select>
+            )}
+
+            {viewType === 'page' && uiPages.length > 0 && (
+              <Select
+                style={{ width: 320 }}
+                placeholder="Select a page (optional)"
+                value={selectedPage}
+                allowClear
+                onClear={() => {
+                  setSelectedPage(null);
+                  setPageAccessData(null);
+                  if (uiPages.length) {
+                    buildAllPagesVisualization(uiPages, expandedNodes);
+                  }
+                }}
+                onChange={(pageId) => {
+                  setSelectedPage(pageId);
+                  if (pageId !== null) {
+                    buildPageAccessMap(pageId, uiPages);
+                  }
+                }}
+              >
+                {uiPages.map((page) => (
+                  <Option key={page.id} value={page.id}>
+                    {page.label} ({page.route})
                   </Option>
                 ))}
               </Select>
             )}
 
-            {viewType === 'page' && (
-              <Select
-                showSearch
-                style={{ width: 300 }}
-                placeholder="Select a page"
-                value={selectedPage}
-                onChange={handlePageChange}
-                filterOption={(input, option) =>
-                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-                }
-                optionFilterProp="children"
-              >
-                {pages && Array.isArray(pages) && pages.map(page => (
-                  <Option key={page.id} value={page.id}>
-                    {page.label}
-                  </Option>
-                ))}
-              </Select>
+            {nodes.length > 0 && (
+              <Input
+                allowClear
+                style={{ width: 320 }}
+                placeholder="Search nodes, actions, endpoints..."
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
             )}
 
             <Button onClick={handleClear}>Clear</Button>
@@ -970,47 +1539,51 @@ export const AccessVisualization = () => {
               <Tag color="purple">{pageSummary.pageLabel}</Tag>
               <Tag color="cyan">{pageSummary.actionsLabel}</Tag>
               <Tag color="red">{pageSummary.endpointsLabel}</Tag>
+              <Tag color="blue">{pageSummary.pagesLabel}</Tag>
             </Space>
           )}
-
-          <Alert
-            message="Interactive Top-Down Visualization"
-            description="All nodes start collapsed. Click on nodes with arrows (▶/▼) to expand and see their children in a vertical tree structure."
-            type="info"
-            showIcon
-            closable
-          />
-
-          {error && <Alert message={error} type="error" />}
         </Space>
       </Card>
 
-      <Card>
+      {error ? <Alert type="error" message={error} style={{ marginBottom: 16 }} /> : null}
+
+      <Card style={{ height: '75vh' }} bodyStyle={{ padding: 0, height: '100%' }}>
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '100px 0' }}>
-            <Spin size="large" />
-            <div style={{ marginTop: 16 }}>Building visualization...</div>
-          </div>
+          <Spin
+            tip="Loading visualization..."
+            style={{ width: '100%', height: '100%' }}
+          >
+            <div style={{ width: '100%', height: '100%' }} />
+          </Spin>
+        ) : forbidden ? (
+          <AccessDenied
+            message="Access Denied"
+            description={error || 'You do not have permission to view this visualization.'}
+          />
         ) : (
-          <div style={{ height: '70vh', width: '100%' }}>
-            {nodes.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '100px 0', color: '#999' }}>
-                Select a {viewType === 'user' ? 'user' : 'page'} to visualize access flow
-              </div>
-            ) : (
-              <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onNodeClick={handleNodeClick}
-                fitView
-                attributionPosition="bottom-left"
-              >
-                <Controls />
-                <Background />
-              </ReactFlow>
-            )}
+          <div style={{ width: '100%', height: '100%' }}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              onlyRenderVisibleElements
+              panOnScroll
+              minZoom={0.2}
+              maxZoom={2}
+              style={{ width: '100%', height: '100%' }}
+              onInit={(instance: ReactFlowInstance) => {
+                reactFlowInstanceRef.current = instance;
+              }}
+              onNodeDoubleClick={handleNodeDoubleClick}
+              fitView
+              fitViewOptions={{ padding: 0.2 }}
+            >
+              <Background gap={30} color="#f0f0f0" />
+              <Controls />
+            </ReactFlow>
           </div>
         )}
       </Card>

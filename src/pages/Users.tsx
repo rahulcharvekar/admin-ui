@@ -21,6 +21,8 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import type { User, CreateUserRequest, UpdateUserRequest } from '../types';
+import { useQueryError } from '../hooks/useQueryError';
+import { AccessDenied } from '../components/AccessDenied';
 
 const { Title } = Typography;
 
@@ -39,6 +41,8 @@ export const Users = () => {
     data: users = [],
     isLoading,
     refetch,
+    isError,
+    error,
   } = useQuery({
     queryKey: ['users'],
     queryFn: async () => {
@@ -46,6 +50,13 @@ export const Users = () => {
       return response.data as User[];
     },
   });
+
+  // Check for access denied
+  const { isAccessDenied } = useQueryError({ isError, error });
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   const createUserMutation = useMutation({
     mutationFn: (userData: CreateUserRequest) => api.users.create(userData),

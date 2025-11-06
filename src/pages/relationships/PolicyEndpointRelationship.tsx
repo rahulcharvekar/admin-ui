@@ -15,65 +15,116 @@ import { SaveOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../services/api';
 import type { Policy, Endpoint } from '../../types';
+import { useQueryError } from '../../hooks/useQueryError';
+import { AccessDenied } from '../../components/AccessDenied';
 
 const { Title, Text } = Typography;
 
 export const PolicyEndpointRelationship = () => {
+  // ...existing code...
+  // Check for access denied errors
+
+  // Debug logs for error states and access denied flags
+  // Place logs after all variables are declared
+  // ...existing code...
+
   const [selectedPolicyId, setSelectedPolicyId] = useState<number | null>(null);
   const [selectedEndpointIds, setSelectedEndpointIds] = useState<number[]>([]);
   const [originalEndpointIds, setOriginalEndpointIds] = useState<number[]>([]);
   const queryClient = useQueryClient();
 
   // Fetch all policies
-  const { data: policies = [], isLoading: policiesLoading } = useQuery({
+  const { data: policies = [], isLoading: policiesLoading, isError: policiesError, error: policiesErrorObj } = useQuery({
     queryKey: ['policies'],
     queryFn: async () => {
-      const response = await api.policies.getAll();
-      return response.data as Policy[];
+      try {
+        const response = await api.policies.getAll();
+        return response.data as Policy[];
+      } catch (err: any) {
+  // ...existing code...
+        const error = new Error(err.message);
+        Object.assign(error, err);
+        throw error;
+      }
     },
   });
 
   // Fetch all endpoints
-  const { data: endpoints = [], isLoading: endpointsLoading } = useQuery({
+  const { data: endpoints = [], isLoading: endpointsLoading, isError: endpointsError, error: endpointsErrorObj } = useQuery({
     queryKey: ['endpoints'],
     queryFn: async () => {
-      const response = await api.endpoints.getAll();
-      return response.data as Endpoint[];
+      try {
+        const response = await api.endpoints.getAll();
+        return response.data as Endpoint[];
+      } catch (err: any) {
+  // ...existing code...
+        const error = new Error(err.message);
+        Object.assign(error, err);
+        throw error;
+      }
     },
   });
 
-  // Fetch policy details with endpoints for selected policy
-  const { data: policyData, isLoading: policyDataLoading } = useQuery({
-    queryKey: ['policy', selectedPolicyId],
+  // Fetch policy details with endpoints assigned to the selected policy
+  const { data: policyDetails, isLoading: policyDetailsLoading, isError: policyDetailsError, error: policyDetailsErrorObj } = useQuery({
+    queryKey: ['policy-details', selectedPolicyId],
     queryFn: async () => {
       if (!selectedPolicyId) return null;
-      console.log('Fetching policy details for policy ID:', selectedPolicyId);
-      const response = await api.policies.getById(selectedPolicyId);
-      console.log('API Response:', response);
-      console.log('Policy data from API:', response.data);
-      return response.data;
+      try {
+  // ...existing code...
+        const response = await api.policies.getById(selectedPolicyId);
+  // ...existing code...
+        return response.data;
+      } catch (err: any) {
+  // ...existing code...
+        const error = new Error(err.message);
+        Object.assign(error, err);
+        throw error;
+      }
     },
     enabled: !!selectedPolicyId,
   });
 
-  // Extract endpoints from policy data
-  const policyEndpoints = policyData?.endpoints || [];
+  // Check for access denied errors
+  const policiesAccessCheck = useQueryError({ isError: policiesError, error: policiesErrorObj });
+  const endpointsAccessCheck = useQueryError({ isError: endpointsError, error: endpointsErrorObj });
+  const policyDetailsAccessCheck = useQueryError({ isError: policyDetailsError, error: policyDetailsErrorObj });
 
-  // Set selected and original endpoint IDs when policy data is loaded
-  useEffect(() => {
-    if (selectedPolicyId !== null && policyData) {
-      // When policy is selected, set the assigned endpoints
-      const endpointIds = policyData.endpoints ? policyData.endpoints.map((e: any) => e.id) : [];
-      console.log('===== DEBUG INFO =====');
-      console.log('Selected Policy ID:', selectedPolicyId);
-      console.log('Policy Endpoints Data:', policyData.endpoints);
-      console.log('Assigned endpoint IDs:', endpointIds);
-      console.log('Total endpoints available:', endpoints.length);
-      console.log('======================');
-      setSelectedEndpointIds(endpointIds);
-      setOriginalEndpointIds(endpointIds); // Track original assignments
+  // If any query returns 403, show access denied
+  // ...existing code...
+
+    if (
+      policiesAccessCheck.isAccessDenied ||
+      endpointsAccessCheck.isAccessDenied ||
+      policyDetailsAccessCheck.isAccessDenied ||
+      (policiesError && (policiesErrorObj as any)?.response?.status === 403) ||
+      (endpointsError && (endpointsErrorObj as any)?.response?.status === 403) ||
+      (policyDetailsError && (policyDetailsErrorObj as any)?.response?.status === 403)
+    ) {
+      return <AccessDenied />;
     }
-  }, [policyData, selectedPolicyId]);
+
+  // Extract endpoints from policy details
+  const assignedEndpoints = policyDetails?.endpoints || [];
+  const policyEndpoints = assignedEndpoints;
+
+  // Memoize sorted endpoint IDs to use as dependency
+  const sortedAssignedEndpointIds = useMemo(() => {
+    return assignedEndpoints.map((e: any) => e.id).sort().join(',');
+  }, [assignedEndpoints]);
+
+  // Set selected and original endpoint IDs when policy endpoint data finishes loading
+  useEffect(() => {
+    // Only run when we just finished loading endpoints for the selected policy
+    if (selectedPolicyId !== null && !policyDetailsLoading) {
+      const endpointIds = assignedEndpoints.map((e: any) => e.id);
+      
+  // ...existing code...
+      
+      setSelectedEndpointIds(endpointIds);
+      setOriginalEndpointIds(endpointIds);
+    }
+  }, [selectedPolicyId, policyDetailsLoading, sortedAssignedEndpointIds]);
 
   // Update policy endpoints mutation (bulk replace)
   const updateEndpointsMutation = useMutation({
@@ -81,7 +132,7 @@ export const PolicyEndpointRelationship = () => {
       api.policies.updateEndpoints(policyId, endpointIds),
     onSuccess: () => {
       message.success('Policy endpoints updated successfully');
-      queryClient.invalidateQueries({ queryKey: ['policy', selectedPolicyId] });
+      queryClient.invalidateQueries({ queryKey: ['policy-details', selectedPolicyId] });
       queryClient.invalidateQueries({ queryKey: ['policies'] });
     },
     onError: (error: any) => {
@@ -207,7 +258,7 @@ export const PolicyEndpointRelationship = () => {
               </Space>
             }
           >
-            {endpointsLoading || policyDataLoading ? (
+            {endpointsLoading || policyDetailsLoading ? (
               <div style={{ textAlign: 'center', padding: '40px 0' }}>
                 <Spin size="large" tip="Loading endpoints..." />
               </div>

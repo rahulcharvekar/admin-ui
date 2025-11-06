@@ -24,6 +24,8 @@ import { SaveOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../services/api';
 import type { Role, Policy } from '../../types';
+import { useQueryError } from '../../hooks/useQueryError';
+import { AccessDenied } from '../../components/AccessDenied';
 
 const { Title, Text } = Typography;
 
@@ -34,7 +36,7 @@ export const RolePolicyRelationship = () => {
   const queryClient = useQueryClient();
 
   // Fetch all roles
-  const { data: roles = [], isLoading: rolesLoading } = useQuery({
+  const { data: roles = [], isLoading: rolesLoading, isError: rolesError, error: rolesErrorObj } = useQuery({
     queryKey: ['roles'],
     queryFn: async () => {
       const response = await api.roles.getAll();
@@ -43,7 +45,7 @@ export const RolePolicyRelationship = () => {
   });
 
   // Fetch all policies
-  const { data: policies = [], isLoading: policiesLoading } = useQuery({
+  const { data: policies = [], isLoading: policiesLoading, isError: policiesError, error: policiesErrorObj } = useQuery({
     queryKey: ['policies'],
     queryFn: async () => {
       const response = await api.policies.getAll();
@@ -52,7 +54,7 @@ export const RolePolicyRelationship = () => {
   });
 
   // Fetch policies for selected role (assigned policies)
-  const { data: roleDetails } = useQuery({
+  const { data: roleDetails, isError: roleDetailsError, error: roleDetailsErrorObj } = useQuery({
     queryKey: ['role-policies', selectedRoleId],
     queryFn: async () => {
       if (!selectedRoleId) return null;
@@ -64,6 +66,16 @@ export const RolePolicyRelationship = () => {
     },
     enabled: !!selectedRoleId,
   });
+
+  // Check for access denied errors
+  const rolesAccessCheck = useQueryError({ isError: rolesError, error: rolesErrorObj });
+  const policiesAccessCheck = useQueryError({ isError: policiesError, error: policiesErrorObj });
+  const roleDetailsAccessCheck = useQueryError({ isError: roleDetailsError, error: roleDetailsErrorObj });
+
+  // If any query returns 403, show access denied
+  if (rolesAccessCheck.isAccessDenied || policiesAccessCheck.isAccessDenied || roleDetailsAccessCheck.isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   const rolePolicies = roleDetails?.policies || [];
 

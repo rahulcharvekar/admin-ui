@@ -10,6 +10,7 @@ import {
   Popconfirm,
   Typography,
   InputNumber,
+  Select,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -171,10 +172,15 @@ export const Pages = () => {
       width: 100,
     },
     {
-      title: 'Parent ID',
+      title: 'Parent Page',
       dataIndex: 'parentId',
       key: 'parentId',
-      width: 100,
+      width: 150,
+      render: (parentId) => {
+        if (!parentId) return '-';
+        const parentPage = pages.find(p => p.id === parentId);
+        return parentPage ? `${parentPage.label} (ID: ${parentId})` : `ID: ${parentId}`;
+      },
     },
     {
       title: 'Display Order',
@@ -282,8 +288,23 @@ export const Pages = () => {
             <Input placeholder="e.g., DashboardOutlined (optional)" />
           </Form.Item>
 
-          <Form.Item name="parentId" label="Parent Page ID">
-            <InputNumber placeholder="Optional" style={{ width: '100%' }} />
+          <Form.Item name="parentId" label="Parent Page">
+            <Select
+              showSearch
+              placeholder="Select parent page (optional)"
+              allowClear
+              optionFilterProp="children"
+              filterOption={(input, option) =>
+                typeof option?.children === 'string' &&
+                (option.children as string).toLowerCase().includes(input.toLowerCase())
+              }
+            >
+              {pages.map((page: UIPage) => (
+                <Select.Option key={page.id} value={page.id}>
+                  {page.label} ({page.route})
+                </Select.Option>
+              ))}
+            </Select>
           </Form.Item>
 
           <Form.Item
@@ -330,8 +351,25 @@ export const Pages = () => {
             <Input placeholder="e.g., DashboardOutlined (optional)" />
           </Form.Item>
 
-          <Form.Item name="parentId" label="Parent Page ID">
-            <InputNumber placeholder="Optional" style={{ width: '100%' }} />
+          <Form.Item name="parentId" label="Parent Page">
+            <Select
+              showSearch
+              placeholder="Select parent page (optional)"
+              allowClear
+              optionFilterProp="children"
+              filterOption={(input, option) =>
+                typeof option?.children === 'string' &&
+                (option.children as string).toLowerCase().includes(input.toLowerCase())
+              }
+            >
+              {pages
+                .filter((page: UIPage) => page.id !== selectedPage?.id) // Prevent selecting itself as parent
+                .map((page: UIPage) => (
+                  <Select.Option key={page.id} value={page.id}>
+                    {page.label} ({page.route})
+                  </Select.Option>
+                ))}
+            </Select>
           </Form.Item>
 
           <Form.Item
