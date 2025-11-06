@@ -156,7 +156,18 @@ export const Layout = () => {
       key: '/access-visualization',
       icon: <PartitionOutlined />,
       label: 'Access Visualization',
-      onClick: () => navigate('/access-visualization'),
+      children: [
+        {
+          key: '/access-visualization/user',
+          label: 'User Access',
+          onClick: () => navigate('/access-visualization/user'),
+        },
+        {
+          key: '/access-visualization/ui',
+          label: 'UI Access',
+          onClick: () => navigate('/access-visualization/ui'),
+        },
+      ],
     },
     {
       key: '/audit-logs',
