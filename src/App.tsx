@@ -18,7 +18,6 @@ import { PageActionAssignment } from './pages/relationships/PageActionAssignment
 import { PageActionEndpointAssignment } from './pages/relationships/PageActionEndpointAssignment';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { setQueryClient } from './services/api';
 
 // Create a query client for React Query
 export const queryClient = new QueryClient({
@@ -30,9 +29,6 @@ export const queryClient = new QueryClient({
     },
   },
 });
-
-// Set the queryClient in the api module for access in interceptors
-setQueryClient(queryClient);
 
 function App() {
   return (

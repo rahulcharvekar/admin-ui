@@ -51,12 +51,7 @@ export const Users = () => {
     },
   });
 
-  // Check for access denied
   const { isAccessDenied } = useQueryError({ isError, error });
-
-  if (isAccessDenied) {
-    return <AccessDenied />;
-  }
 
   const createUserMutation = useMutation({
     mutationFn: (userData: CreateUserRequest) => api.users.create(userData),
@@ -178,26 +173,26 @@ export const Users = () => {
 
   // Table columns
   const columns: ColumnsType<User> = [
-      {
-        title: 'ID',
-        dataIndex: 'id',
-        key: 'id',
-        width: 70,
-        sorter: (a: User, b: User) => a.id - b.id,
-        defaultSortOrder: 'ascend',
-      },
-      {
-        title: 'Username',
-        dataIndex: 'username',
-        key: 'username',
-        render: (text: string) => <strong>{text}</strong>,
-      },
-      {
-        title: 'Email',
-        dataIndex: 'email',
-        key: 'email',
-      },
-      {
+    {
+      title: 'ID',
+      dataIndex: 'id',
+      key: 'id',
+      width: 70,
+      sorter: (a: User, b: User) => a.id - b.id,
+      defaultSortOrder: 'ascend',
+    },
+    {
+      title: 'Username',
+      dataIndex: 'username',
+      key: 'username',
+      render: (text: string) => <strong>{text}</strong>,
+    },
+    {
+      title: 'Email',
+      dataIndex: 'email',
+      key: 'email',
+    },
+    {
         title: 'Status',
         dataIndex: 'isActive',
         key: 'status',
@@ -245,7 +240,11 @@ export const Users = () => {
           </Button>
         ),
       },
-    ];
+  ];
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

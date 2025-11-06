@@ -67,16 +67,6 @@ export const UserRoleRelationship = () => {
     enabled: !!selectedUserId,
   });
 
-  // Check for access denied errors
-  const usersAccessCheck = useQueryError({ isError: usersError, error: usersErrorObj });
-  const rolesAccessCheck = useQueryError({ isError: rolesError, error: rolesErrorObj });
-  const userRolesAccessCheck = useQueryError({ isError: userRolesError, error: userRolesErrorObj });
-
-  // If any query returns 403, show access denied
-  if (usersAccessCheck.isAccessDenied || rolesAccessCheck.isAccessDenied || userRolesAccessCheck.isAccessDenied) {
-    return <AccessDenied />;
-  }
-
   const userRoles = userRolesData || [];
 
   // Set selected and original role IDs when user roles data is loaded
@@ -108,6 +98,11 @@ export const UserRoleRelationship = () => {
       message.error(error.response?.data?.error || 'Failed to update roles');
     },
   });
+
+  // Check for access denied errors
+  const usersAccessCheck = useQueryError({ isError: usersError, error: usersErrorObj });
+  const rolesAccessCheck = useQueryError({ isError: rolesError, error: rolesErrorObj });
+  const userRolesAccessCheck = useQueryError({ isError: userRolesError, error: userRolesErrorObj });
 
   const handleUserChange = (userId: number) => {
     setSelectedUserId(userId);
@@ -154,6 +149,10 @@ export const UserRoleRelationship = () => {
   const userRolesLoading = userRolesData === undefined && selectedUserId !== null;
   const hasChanges = JSON.stringify([...selectedRoleIds].sort()) !== 
                      JSON.stringify((userRoles?.map((r: any) => r.id) || []).sort());
+
+  if (usersAccessCheck.isAccessDenied || rolesAccessCheck.isAccessDenied || userRolesAccessCheck.isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

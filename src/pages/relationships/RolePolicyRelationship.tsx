@@ -67,16 +67,6 @@ export const RolePolicyRelationship = () => {
     enabled: !!selectedRoleId,
   });
 
-  // Check for access denied errors
-  const rolesAccessCheck = useQueryError({ isError: rolesError, error: rolesErrorObj });
-  const policiesAccessCheck = useQueryError({ isError: policiesError, error: policiesErrorObj });
-  const roleDetailsAccessCheck = useQueryError({ isError: roleDetailsError, error: roleDetailsErrorObj });
-
-  // If any query returns 403, show access denied
-  if (rolesAccessCheck.isAccessDenied || policiesAccessCheck.isAccessDenied || roleDetailsAccessCheck.isAccessDenied) {
-    return <AccessDenied />;
-  }
-
   const rolePolicies = roleDetails?.policies || [];
 
   // Set selected and original policy IDs when role details are loaded
@@ -108,6 +98,11 @@ export const RolePolicyRelationship = () => {
       message.error(error.response?.data?.error || 'Failed to update policies');
     },
   });
+
+  // Check for access denied errors
+  const rolesAccessCheck = useQueryError({ isError: rolesError, error: rolesErrorObj });
+  const policiesAccessCheck = useQueryError({ isError: policiesError, error: policiesErrorObj });
+  const roleDetailsAccessCheck = useQueryError({ isError: roleDetailsError, error: roleDetailsErrorObj });
 
   const handleRoleChange = (roleId: number) => {
     setSelectedRoleId(roleId);
@@ -156,6 +151,10 @@ export const RolePolicyRelationship = () => {
   const roleDetailsLoading = roleDetails === undefined && selectedRoleId !== null;
   const hasChanges = JSON.stringify([...selectedPolicyIds].sort()) !== 
                      JSON.stringify((rolePolicies?.map((p: any) => p.id) || []).sort());
+
+  if (rolesAccessCheck.isAccessDenied || policiesAccessCheck.isAccessDenied || roleDetailsAccessCheck.isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

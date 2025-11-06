@@ -54,12 +54,7 @@ export const Roles = () => {
     },
   });
 
-  // Check for access denied
   const { isAccessDenied } = useQueryError({ isError, error });
-
-  if (isAccessDenied) {
-    return <AccessDenied />;
-  }
 
   // Create role mutation
   const createRoleMutation = useMutation({
@@ -195,6 +190,10 @@ export const Roles = () => {
       ),
     },
   ];
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

@@ -21,6 +21,8 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import type { PageAction } from '../types';
+import { useQueryError } from '../hooks/useQueryError';
+import { AccessDenied } from '../components/AccessDenied';
 
 const { Title } = Typography;
 
@@ -48,22 +50,38 @@ export const PageActions = () => {
     data: pageActions = [],
     isLoading,
     refetch,
+    isError: isPageActionsError,
+    error: pageActionsError,
   } = useQuery({
     queryKey: ['pageActions'],
     queryFn: async () => {
       const response = await api.pageActions.getAll();
       return response.data as PageAction[];
     },
+    retry: false,
+  });
+  const { isAccessDenied: isPageActionsAccessDenied } = useQueryError({
+    isError: isPageActionsError,
+    error: pageActionsError,
   });
 
   // Fetch UI pages for dropdown
-  const { data: uiPages = [] } = useQuery({
+  const {
+    data: uiPages = [],
+    isError: isUiPagesError,
+    error: uiPagesError,
+  } = useQuery({
     queryKey: ['uiPages'],
     queryFn: async () => {
       const response = await api.uiPages.getAll();
       // Backend returns { pages: [...], tree: [...] }
       return response.data.pages || [];
     },
+    retry: false,
+  });
+  const { isAccessDenied: isUiPagesAccessDenied } = useQueryError({
+    isError: isUiPagesError,
+    error: uiPagesError,
   });
 
   // Create page action mutation
@@ -224,6 +242,10 @@ export const PageActions = () => {
       ),
     },
   ];
+
+  if (isPageActionsAccessDenied || isUiPagesAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

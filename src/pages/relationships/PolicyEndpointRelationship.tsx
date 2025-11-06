@@ -85,25 +85,6 @@ export const PolicyEndpointRelationship = () => {
     enabled: !!selectedPolicyId,
   });
 
-  // Check for access denied errors
-  const policiesAccessCheck = useQueryError({ isError: policiesError, error: policiesErrorObj });
-  const endpointsAccessCheck = useQueryError({ isError: endpointsError, error: endpointsErrorObj });
-  const policyDetailsAccessCheck = useQueryError({ isError: policyDetailsError, error: policyDetailsErrorObj });
-
-  // If any query returns 403, show access denied
-  // ...existing code...
-
-    if (
-      policiesAccessCheck.isAccessDenied ||
-      endpointsAccessCheck.isAccessDenied ||
-      policyDetailsAccessCheck.isAccessDenied ||
-      (policiesError && (policiesErrorObj as any)?.response?.status === 403) ||
-      (endpointsError && (endpointsErrorObj as any)?.response?.status === 403) ||
-      (policyDetailsError && (policyDetailsErrorObj as any)?.response?.status === 403)
-    ) {
-      return <AccessDenied />;
-    }
-
   // Extract endpoints from policy details
   const assignedEndpoints = policyDetails?.endpoints || [];
   const policyEndpoints = assignedEndpoints;
@@ -125,6 +106,19 @@ export const PolicyEndpointRelationship = () => {
       setOriginalEndpointIds(endpointIds);
     }
   }, [selectedPolicyId, policyDetailsLoading, sortedAssignedEndpointIds]);
+
+  // Check for access denied errors
+  const policiesAccessCheck = useQueryError({ isError: policiesError, error: policiesErrorObj });
+  const endpointsAccessCheck = useQueryError({ isError: endpointsError, error: endpointsErrorObj });
+  const policyDetailsAccessCheck = useQueryError({ isError: policyDetailsError, error: policyDetailsErrorObj });
+
+  const showAccessDenied =
+    policiesAccessCheck.isAccessDenied ||
+    endpointsAccessCheck.isAccessDenied ||
+    policyDetailsAccessCheck.isAccessDenied ||
+    (policiesError && (policiesErrorObj as any)?.response?.status === 403) ||
+    (endpointsError && (endpointsErrorObj as any)?.response?.status === 403) ||
+    (policyDetailsError && (policyDetailsErrorObj as any)?.response?.status === 403);
 
   // Update policy endpoints mutation (bulk replace)
   const updateEndpointsMutation = useMutation({
@@ -186,6 +180,10 @@ export const PolicyEndpointRelationship = () => {
   const isLoading = policiesLoading || endpointsLoading;
   const hasChanges = JSON.stringify([...selectedEndpointIds].sort()) !== 
                      JSON.stringify((policyEndpoints?.map((e: any) => e.id) || []).sort());
+
+  if (showAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

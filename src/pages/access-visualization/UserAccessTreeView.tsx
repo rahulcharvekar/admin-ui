@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Card, Select, Spin, Alert, Typography, Space, Button, Input, Tree, Tag } from 'antd';
+import { Card, Select, Spin, Alert, Typography, Space, Button, Input, Tree, Tag, Tooltip } from 'antd';
 import type { TreeDataNode } from 'antd';
 import { api } from '../../services/api';
 import { AccessDenied } from '../../components/AccessDenied';
@@ -89,21 +89,74 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
     ? `${userData.fullName} (${userData.username})`
     : userData.username;
 
-  const taggedRow = (content: ReactNode, type: string, color: string) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+  const TAG_COLORS = {
+    user: 'blue',
+    role: 'green',
+    policy: 'orange',
+    endpoint: 'red',
+    action: 'purple',
+  };
+
+  const METHOD_COLORS: Record<string, string> = {
+    GET: 'green',
+    POST: 'blue',
+    PUT: 'orange',
+    PATCH: 'purple',
+    DELETE: 'red',
+  };
+
+  const getMethodColor = (method?: string) => {
+    if (!method) return 'geekblue';
+    const key = method.toUpperCase();
+    return METHOD_COLORS[key] ?? 'geekblue';
+  };
+
+  const createTitleRow = (
+    content: ReactNode,
+    typeLabel: string,
+    tagColor: string,
+    childCountLabel?: string
+  ) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       {content}
-      <Tag color={color} style={{ marginInlineStart: 0 }}>
-        {type}
+      <Tag color={tagColor} style={{ marginInlineStart: 0 }}>
+        {typeLabel}
       </Tag>
+      {childCountLabel ? <span style={{ color: '#8c8c8c', fontSize: 12 }}>[{childCountLabel}]</span> : null}
     </div>
   );
+
+  const renderDescriptionLine = (displayText?: string, tooltipText?: string) => {
+    if (!displayText) return null;
+    const content = (
+      <span
+        style={{
+          color: '#595959',
+          fontSize: 12,
+          display: '-webkit-box',
+          WebkitLineClamp: 1,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {highlightText(displayText, searchQuery)}
+      </span>
+    );
+    return <Tooltip title={tooltipText ?? displayText}>{content}</Tooltip>;
+  };
 
   const userNode: TreeDataNode = {
     key: `user-${userData.id}`,
     title: (
       <div>
-        {taggedRow(<strong>{highlightText(userLabel, searchQuery)}</strong>, 'User', 'blue')}
-        {userData.email ? <div style={{ color: '#595959' }}>{highlightText(userData.email, searchQuery)}</div> : null}
+        {createTitleRow(
+          <strong>{highlightText(userLabel, searchQuery)}</strong>,
+          'User',
+          TAG_COLORS.user,
+          summaryCountLabel(roles.length, 'role')
+        )}
+        {renderDescriptionLine(userData.email)}
       </div>
     ),
     children: roles.map((role, roleIndex) => {
@@ -113,10 +166,13 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
         key: roleNodeKey,
         title: (
           <div>
-            {taggedRow(<strong>{highlightText(role.name, searchQuery)}</strong>, 'Role', 'green')}
-            {role.description ? (
-              <div style={{ color: '#595959' }}>{highlightText(role.description, searchQuery)}</div>
-            ) : null}
+            {createTitleRow(
+              <strong>{highlightText(role.name, searchQuery)}</strong>,
+              'Role',
+              TAG_COLORS.role,
+              summaryCountLabel(policies.length, 'policy', 'policies')
+            )}
+            {renderDescriptionLine(role.description)}
           </div>
         ),
         children: policies.map((policy, policyIndex) => {
@@ -126,30 +182,45 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
             key: policyNodeKey,
             title: (
               <div>
-                {taggedRow(<strong>{highlightText(policy.name, searchQuery)}</strong>, 'Policy', 'orange')}
-                {policy.description ? (
-                  <div style={{ color: '#595959' }}>{highlightText(policy.description, searchQuery)}</div>
-                ) : null}
+                {createTitleRow(
+                  <strong>{highlightText(policy.name, searchQuery)}</strong>,
+                  'Policy',
+                  TAG_COLORS.policy,
+                  summaryCountLabel(endpoints.length, 'endpoint')
+                )}
+                {renderDescriptionLine(policy.description)}
               </div>
             ),
             children: endpoints.map((endpoint, endpointIndex) => {
               const endpointNodeKey = `${policyNodeKey}-endpoint-${endpointIndex}`;
               const actions = endpoint.page_actions || [];
               const endpointTitle = `${endpoint.method} ${endpoint.path}`;
+              const serviceInfo = [endpoint.service, endpoint.version].filter(Boolean).join(' • ');
+              const methodTag = endpoint.method ? (
+                <Tag color={getMethodColor(endpoint.method)} style={{ marginInlineEnd: 0 }}>
+                  {endpoint.method}
+                </Tag>
+              ) : null;
+              const endpointPath = endpoint.path || endpointTitle.trim();
+              const endpointDescription = endpoint.description || serviceInfo || '';
+              const endpointTooltipText = [endpoint.description, serviceInfo].filter(Boolean).join(' • ') || undefined;
+              const endpointContent = (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {methodTag}
+                  <strong>{highlightText(endpointPath, searchQuery)}</strong>
+                </span>
+              );
               return {
                 key: endpointNodeKey,
                 title: (
                   <div>
-                    {taggedRow(<strong>{highlightText(endpointTitle, searchQuery)}</strong>, 'Endpoint', 'red')}
-                    {endpoint.description ? (
-                      <div style={{ color: '#595959' }}>{highlightText(endpoint.description, searchQuery)}</div>
-                    ) : null}
-                    <div style={{ color: '#8c8c8c', fontSize: 12 }}>
-                      {highlightText(
-                        [endpoint.service, endpoint.version].filter(Boolean).join(' • '),
-                        searchQuery
-                      )}
-                    </div>
+                    {createTitleRow(
+                      endpointContent,
+                      'Endpoint',
+                      TAG_COLORS.endpoint,
+                      summaryCountLabel(actions.length, 'action')
+                    )}
+                    {renderDescriptionLine(endpointDescription, endpointTooltipText)}
                   </div>
                 ),
                 children: actions.map((action, actionIndex) => {
@@ -162,12 +233,13 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
                     key: actionNodeKey,
                     title: (
                       <div>
-                        {taggedRow(<strong>{highlightText(actionLabel, searchQuery)}</strong>, 'Page Action', 'purple')}
-                        {page ? (
-                          <div style={{ color: '#8c8c8c', fontSize: 12 }}>
-                            {highlightText(page, searchQuery)}
-                          </div>
-                        ) : null}
+                        {createTitleRow(
+                          <strong>{highlightText(actionLabel, searchQuery)}</strong>,
+                          'Page Action',
+                          TAG_COLORS.action,
+                          undefined
+                        )}
+                        {renderDescriptionLine(page)}
                       </div>
                     ),
                   };

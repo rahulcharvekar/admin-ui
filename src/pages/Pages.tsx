@@ -22,6 +22,8 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import type { UIPage } from '../types';
+import { useQueryError } from '../hooks/useQueryError';
+import { AccessDenied } from '../components/AccessDenied';
 
 const { Title } = Typography;
 
@@ -47,6 +49,8 @@ export const Pages = () => {
     data: pages = [],
     isLoading,
     refetch,
+    isError,
+    error,
   } = useQuery({
     queryKey: ['uiPages'],
     queryFn: async () => {
@@ -54,7 +58,9 @@ export const Pages = () => {
       // Backend returns { pages: [...], tree: [...] }
       return (response.data.pages || []) as UIPage[];
     },
+    retry: false,
   });
+  const { isAccessDenied } = useQueryError({ isError, error });
 
   // Create page mutation
   const createPageMutation = useMutation({
@@ -216,6 +222,10 @@ export const Pages = () => {
       ),
     },
   ];
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

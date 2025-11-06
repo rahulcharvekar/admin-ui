@@ -10,7 +10,11 @@ interface UseQueryErrorOptions {
 export const useQueryError = ({ error, isError, onAccessDenied, onError }: UseQueryErrorOptions) => {
   useEffect(() => {
     if (isError && error) {
-      const status = error?.response?.status;
+      const status =
+        error?.response?.status ??
+        error?.status ??
+        error?.response?.data?.status ??
+        error?.data?.status;
       
       if (status === 403) {
         console.error('Access Denied (403):', error.response?.data);
@@ -24,7 +28,12 @@ export const useQueryError = ({ error, isError, onAccessDenied, onError }: UseQu
   }, [isError, error, onAccessDenied, onError]);
 
   return {
-    isAccessDenied: isError && error?.response?.status === 403,
+    isAccessDenied:
+      isError &&
+      (error?.response?.status === 403 ||
+        error?.status === 403 ||
+        error?.response?.data?.status === 403 ||
+        error?.data?.status === 403),
     errorMessage: error?.response?.data?.message || error?.message || 'An error occurred',
   };
 };

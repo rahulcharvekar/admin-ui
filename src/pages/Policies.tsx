@@ -62,12 +62,7 @@ export const Policies = () => {
     },
   });
 
-  // Check for access denied
   const { isAccessDenied } = useQueryError({ isError, error });
-
-  if (isAccessDenied) {
-    return <AccessDenied />;
-  }
 
   // Create policy mutation
   const createPolicyMutation = useMutation({
@@ -274,6 +269,10 @@ export const Policies = () => {
       ),
     },
   ];
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

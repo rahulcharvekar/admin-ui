@@ -61,12 +61,7 @@ export const Endpoints = () => {
     },
   });
 
-  // Check for access denied
   const { isAccessDenied } = useQueryError({ isError, error });
-
-  if (isAccessDenied) {
-    return <AccessDenied />;
-  }
 
   // Create endpoint mutation
   const createEndpointMutation = useMutation({
@@ -272,6 +267,10 @@ export const Endpoints = () => {
       ),
     },
   ];
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

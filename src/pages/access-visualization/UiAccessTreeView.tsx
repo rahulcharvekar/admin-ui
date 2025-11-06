@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Card, Spin, Alert, Typography, Space, Button, Input, Tree, Select, Tag } from 'antd';
+import { Card, Spin, Alert, Typography, Space, Button, Input, Tree, Select, Tag, Tooltip } from 'antd';
 import type { TreeDataNode } from 'antd';
 import { api } from '../../services/api';
 import { AccessDenied } from '../../components/AccessDenied';
+import { formatCountLabel } from './graphUtils';
 import type { PageNode, RawPageNode, PageAction } from './pageDataUtils';
 import {
   buildHierarchy,
@@ -41,66 +42,136 @@ const highlightText = (text: string, query: string) => {
   );
 };
 
-const taggedRow = (content: ReactNode, type: string, color: string) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+const TAG_COLORS = {
+  page: 'geekblue',
+  action: 'purple',
+  endpoint: 'red',
+};
+
+const METHOD_COLORS: Record<string, string> = {
+  GET: 'green',
+  POST: 'blue',
+  PUT: 'orange',
+  PATCH: 'purple',
+  DELETE: 'red',
+};
+
+const getMethodColor = (method?: string) => {
+  if (!method) return 'geekblue';
+  const key = method.toUpperCase();
+  return METHOD_COLORS[key] ?? 'geekblue';
+};
+
+const createTitleRow = (
+  content: ReactNode,
+  typeLabel: string,
+  tagColor: string,
+  childCountLabel?: string
+) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
     {content}
-    <Tag color={color} style={{ marginInlineStart: 0 }}>
-      {type}
+    <Tag color={tagColor} style={{ marginInlineStart: 0 }}>
+      {typeLabel}
     </Tag>
+    {childCountLabel ? <span style={{ color: '#8c8c8c', fontSize: 12 }}>[{childCountLabel}]</span> : null}
   </div>
 );
 
-const buildPageTreeNode = (page: PageNode, searchQuery: string): TreeDataNode => {
-  const actionChildren: TreeDataNode[] = [];
+const renderDescriptionLine = (displayText?: string, tooltipText?: string, highlight?: (value: string) => ReactNode) => {
+  if (!displayText) return null;
+  const content = (
+    <span
+      style={{
+        color: '#595959',
+        fontSize: 12,
+        display: '-webkit-box',
+        WebkitLineClamp: 1,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}
+    >
+      {highlight ? highlight(displayText) : displayText}
+    </span>
+  );
+  return <Tooltip title={tooltipText ?? displayText}>{content}</Tooltip>;
+};
 
-  (page.actions || []).forEach((action: PageAction, index) => {
+const buildPageTreeNode = (page: PageNode, searchQuery: string): TreeDataNode => {
+  const highlight = (value: string) => highlightText(value, searchQuery);
+
+  const childPageNodes = (page.children || []).map((child) => buildPageTreeNode(child, searchQuery));
+
+  const actionChildren: TreeDataNode[] = (page.actions || []).map((action: PageAction, index) => {
     const actionKey = `page-${page.id}-action-${index}`;
-    const endpointLabel = action.endpoint_details
-      ? `${action.endpoint_details.method ?? ''} ${action.endpoint_details.path ?? ''}`.trim()
-      : action.endpoint ?? '';
+    const endpointDetails = action.endpoint_details;
+    const method = endpointDetails?.method;
+    const path = endpointDetails?.path ?? action.endpoint ?? '';
+    const endpointLabel = [endpointDetails?.method, endpointDetails?.path].filter(Boolean).join(' ');
+    const serviceInfo = [endpointDetails?.service, endpointDetails?.version].filter(Boolean).join(' • ');
+    const methodTag = method ? (
+      <Tag color={getMethodColor(method)} style={{ marginInlineEnd: 0 }}>
+        {method}
+      </Tag>
+    ) : null;
 
     const endpointNode: TreeDataNode | undefined = endpointLabel
       ? {
           key: `${actionKey}-endpoint`,
           title: (
-            taggedRow(<span style={{ color: '#8c8c8c' }}>{highlightText(endpointLabel, searchQuery)}</span>, 'Endpoint', 'red')
+            <div>
+              {createTitleRow(
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {methodTag}
+                  <strong>{highlight(path || endpointLabel)}</strong>
+                </span>,
+                'Endpoint',
+                TAG_COLORS.endpoint
+              )}
+              {renderDescriptionLine(serviceInfo, serviceInfo, highlight)}
+            </div>
           ),
         }
       : undefined;
 
-    actionChildren.push({
+    return {
       key: actionKey,
       title: (
         <div>
-          {taggedRow(
-            <strong>{highlightText(action.label || action.action || 'Action', searchQuery)}</strong>,
+          {createTitleRow(
+            <strong>{highlight(action.label || action.action || 'Action')}</strong>,
             'Page Action',
-            'purple'
+            TAG_COLORS.action,
+            endpointNode ? formatCountLabel(1, 'endpoint') : undefined
           )}
-          {endpointNode ? (
-            <div style={{ color: '#8c8c8c', fontSize: 12 }}>
-              {highlightText(endpointLabel, searchQuery)}
-            </div>
-          ) : null}
+          {renderDescriptionLine(action.action && action.action !== action.label ? action.action : undefined, undefined, highlight)}
         </div>
       ),
       children: endpointNode ? [endpointNode] : undefined,
-    });
+    };
   });
 
-  const childPages = (page.children || []).map((child) => buildPageTreeNode(child, searchQuery));
+  const childCountLabels = [
+    formatCountLabel(childPageNodes.length, 'child page'),
+    formatCountLabel(actionChildren.length, 'action'),
+  ]
+    .filter(Boolean)
+    .join(', ');
 
   return {
     key: `page-${page.id}`,
     title: (
       <div>
-        {taggedRow(<strong>{highlightText(page.label, searchQuery)}</strong>, 'Page', 'geekblue')}
-        {page.route ? (
-          <div style={{ color: '#8c8c8c', fontSize: 12 }}>{highlightText(page.route, searchQuery)}</div>
-        ) : null}
+        {createTitleRow(
+          <strong>{highlight(page.label)}</strong>,
+          'Page',
+          TAG_COLORS.page,
+          childCountLabels || undefined
+        )}
+        {renderDescriptionLine(page.route, page.route, highlight)}
       </div>
     ),
-    children: [...childPages, ...actionChildren],
+    children: [...childPageNodes, ...actionChildren],
   };
 };
 
@@ -128,6 +199,13 @@ export const UiAccessTreeView: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  const [pageSummary, setPageSummary] = useState<{
+    pageLabel: string;
+    routeLabel: string;
+    childPagesLabel: string;
+    actionsLabel: string;
+    endpointsLabel: string;
+  } | null>(null);
 
   const getSelectedPages = useCallback((): PageNode[] => {
     if (!selectedPage) return uiPages;
@@ -161,6 +239,7 @@ export const UiAccessTreeView: React.FC = () => {
         const hierarchicalPages = buildHierarchy(normalizedPages);
         setUiPages(hierarchicalPages);
         buildTree(hierarchicalPages, searchQuery);
+        setPageSummary(null);
         setForbidden(false);
       } catch (err: any) {
         console.error('Failed to fetch UI pages:', err);
@@ -189,12 +268,14 @@ export const UiAccessTreeView: React.FC = () => {
 
     if (pageId === null) {
       buildTree(uiPages, '', false);
+      setPageSummary(null);
       return;
     }
 
     const found = findPageById(uiPages, pageId);
     if (!found) {
       setError('Page not found in visualization');
+      setPageSummary(null);
       return;
     }
 
@@ -205,6 +286,34 @@ export const UiAccessTreeView: React.FC = () => {
     setTreeData(tree);
     setExpandedKeys(Array.from(expanded));
     setAutoExpandParent(true);
+
+    const gatherSummary = (pageNode: PageNode) => {
+      const childPages = pageNode.children || [];
+      let actionCount = 0;
+      let endpointCount = 0;
+
+      const traverse = (node: PageNode) => {
+        (node.actions || []).forEach((action) => {
+          actionCount += 1;
+          if (action.endpoint || action.endpoint_details?.path) {
+            endpointCount += 1;
+          }
+        });
+        (node.children || []).forEach(traverse);
+      };
+
+      traverse(pageNode);
+
+      setPageSummary({
+        pageLabel: pageNode.label,
+        routeLabel: pageNode.route,
+        childPagesLabel: formatCountLabel(childPages.length, 'child page'),
+        actionsLabel: formatCountLabel(actionCount, 'action'),
+        endpointsLabel: formatCountLabel(endpointCount, 'endpoint'),
+      });
+    };
+
+    gatherSummary(found);
   };
 
   const handleExpand = (keys: React.Key[]) => {
@@ -272,6 +381,16 @@ export const UiAccessTreeView: React.FC = () => {
               Reset
             </Button>
           </Space>
+
+          {pageSummary ? (
+            <Space wrap>
+              <Tag color="geekblue">{pageSummary.pageLabel}</Tag>
+              {pageSummary.routeLabel ? <Tag color="blue">{pageSummary.routeLabel}</Tag> : null}
+              {pageSummary.childPagesLabel ? <Tag color="cyan">{pageSummary.childPagesLabel}</Tag> : null}
+              {pageSummary.actionsLabel ? <Tag color="purple">{pageSummary.actionsLabel}</Tag> : null}
+              {pageSummary.endpointsLabel ? <Tag color="red">{pageSummary.endpointsLabel}</Tag> : null}
+            </Space>
+          ) : null}
         </Space>
       </Card>
 

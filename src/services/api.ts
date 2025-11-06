@@ -1,12 +1,6 @@
 // @ts-nocheck
 import axios from 'axios';
 
-// Import queryClient to clear cache on 403
-let queryClient: any = null;
-export const setQueryClient = (client: any) => {
-  queryClient = client;
-};
-
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
 const apiClient = axios.create({
@@ -32,10 +26,6 @@ apiClient.interceptors.response.use(
     // Handle 403 Forbidden - Access Denied
     if (error.response?.status === 403) {
       console.error('Access Denied (403):', error.response?.data);
-      // Clear all query cache to prevent showing stale data
-      if (queryClient) {
-        queryClient.clear();
-      }
     }
     return Promise.reject(error);
   }

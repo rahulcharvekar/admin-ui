@@ -25,6 +25,8 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import type { UIPage, PageAction, Endpoint } from '../types';
+import { AccessDenied } from '../components/AccessDenied';
+import { useQueryError } from '../hooks/useQueryError';
 
 const { Title, Text } = Typography;
 
@@ -73,6 +75,8 @@ export const PageWorkspace = () => {
     data: pagesData = [],
     isLoading: pagesLoading,
     refetch: refetchPages,
+    isError: isPagesError,
+    error: pagesError,
   } = useQuery({
     queryKey: ['uiPages'],
     queryFn: async () => {
@@ -84,26 +88,48 @@ export const PageWorkspace = () => {
       })) as UIPage[];
       return pages;
     },
+    retry: false,
   });
 
   const {
     data: actionsRaw = [],
     refetch: refetchActions,
+    isError: isPageActionsError,
+    error: pageActionsError,
   } = useQuery({
     queryKey: ['pageActions'],
     queryFn: async () => {
       const response = await api.pageActions.getAll();
       return (response.data || []) as PageAction[];
     },
+    retry: false,
   });
 
   // Fetch all endpoints for action-endpoint assignment
-  const { data: endpoints = [] } = useQuery({
+  const {
+    data: endpoints = [],
+    isError: isEndpointsError,
+    error: endpointsError,
+  } = useQuery({
     queryKey: ['endpoints'],
     queryFn: async () => {
       const response = await api.endpoints.getAll();
       return (response.data || []) as Endpoint[];
     },
+    retry: false,
+  });
+
+  const { isAccessDenied: isPagesAccessDenied } = useQueryError({
+    isError: isPagesError,
+    error: pagesError,
+  });
+  const { isAccessDenied: isPageActionsAccessDenied } = useQueryError({
+    isError: isPageActionsError,
+    error: pageActionsError,
+  });
+  const { isAccessDenied: isEndpointsAccessDenied } = useQueryError({
+    isError: isEndpointsError,
+    error: endpointsError,
   });
 
   const actionsData = useMemo<PageAction[]>(() => {
@@ -482,6 +508,10 @@ export const PageWorkspace = () => {
     editActionForm.resetFields();
     setSelectedAction(null);
   };
+
+  if (isPagesAccessDenied || isPageActionsAccessDenied || isEndpointsAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>

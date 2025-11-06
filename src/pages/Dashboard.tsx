@@ -9,6 +9,8 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { AccessDenied } from '../components/AccessDenied';
+import { useQueryError } from '../hooks/useQueryError';
 
 const { Title } = Typography;
 
@@ -22,40 +24,68 @@ export const Dashboard = () => {
   const navigate = useNavigate();
   
   // Fetch service catalog for counts
-  const { data: serviceCatalog, isLoading: catalogLoading, error: catalogError } = useQuery<ServiceCatalogResponse>({
+  const {
+    data: serviceCatalog,
+    isLoading: catalogLoading,
+    error: catalogError,
+    isError: isCatalogError,
+  } = useQuery<ServiceCatalogResponse>({
     queryKey: ['service-catalog'],
     queryFn: async () => {
       const response = await api.meta.getServiceCatalog();
       return response.data;
     },
+    retry: false,
   });
+  const { isAccessDenied: catalogAccessDenied } = useQueryError({ isError: isCatalogError, error: catalogError });
 
   // Fetch users count
-  const { data: users = [], isLoading: usersLoading } = useQuery({
+  const {
+    data: users = [],
+    isLoading: usersLoading,
+    isError: isUsersError,
+    error: usersError,
+  } = useQuery({
     queryKey: ['users'],
     queryFn: async () => {
       const response = await api.users.getAll();
       return response.data;
     },
+    retry: false,
   });
+  const { isAccessDenied: usersAccessDenied } = useQueryError({ isError: isUsersError, error: usersError });
 
   // Fetch roles count
-  const { data: roles = [], isLoading: rolesLoading } = useQuery({
+  const {
+    data: roles = [],
+    isLoading: rolesLoading,
+    isError: isRolesError,
+    error: rolesError,
+  } = useQuery({
     queryKey: ['roles'],
     queryFn: async () => {
       const response = await api.roles.getAll();
       return response.data;
     },
+    retry: false,
   });
+  const { isAccessDenied: rolesAccessDenied } = useQueryError({ isError: isRolesError, error: rolesError });
 
   // Fetch policies count
-  const { data: policies = [], isLoading: policiesLoading } = useQuery({
+  const {
+    data: policies = [],
+    isLoading: policiesLoading,
+    isError: isPoliciesError,
+    error: policiesError,
+  } = useQuery({
     queryKey: ['policies'],
     queryFn: async () => {
       const response = await api.policies.getAll();
       return response.data;
     },
+    retry: false,
   });
+  const { isAccessDenied: policiesAccessDenied } = useQueryError({ isError: isPoliciesError, error: policiesError });
 
   const userCount = Array.isArray(users) ? users.length : 0;
   const roleCount = Array.isArray(roles) ? roles.length : 0;
@@ -68,6 +98,12 @@ export const Dashboard = () => {
   const pageCount = serviceCatalog?.pages ? serviceCatalog.pages.length : 0;
 
   const isLoading = catalogLoading || usersLoading || rolesLoading || policiesLoading;
+  const isAccessDenied =
+    catalogAccessDenied || usersAccessDenied || rolesAccessDenied || policiesAccessDenied;
+
+  if (isAccessDenied) {
+    return <AccessDenied />;
+  }
 
   return (
     <div>
