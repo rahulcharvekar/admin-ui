@@ -159,12 +159,12 @@ export const Layout = () => {
       children: [
         {
           key: '/access-visualization/user',
-          label: 'User Access',
+          label: 'User Access Tree',
           onClick: () => navigate('/access-visualization/user'),
         },
         {
           key: '/access-visualization/ui',
-          label: 'UI Access',
+          label: 'UI Access Tree',
           onClick: () => navigate('/access-visualization/ui'),
         },
       ],

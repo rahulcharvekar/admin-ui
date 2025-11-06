@@ -9,8 +9,8 @@ import { Policies } from './pages/Policies';
 import { Endpoints } from './pages/Endpoints';
 import { PageWorkspace } from './pages/PageWorkspace';
 import { AuditLogs } from './pages/AuditLogs';
-import { UserAccessVisualization } from './pages/access-visualization/UserAccessVisualization';
-import { UiAccessVisualization } from './pages/access-visualization/UiAccessVisualization';
+import { UserAccessTreeView } from './pages/access-visualization/UserAccessTreeView';
+import { UiAccessTreeView } from './pages/access-visualization/UiAccessTreeView';
 import { PolicyEndpointRelationship } from './pages/relationships/PolicyEndpointRelationship';
 import { UserRoleRelationship } from './pages/relationships/UserRoleRelationship';
 import { RolePolicyRelationship } from './pages/relationships/RolePolicyRelationship';
@@ -73,11 +73,8 @@ function App() {
               <Route path="pages/actions" element={<PageActionAssignment />} />
               <Route path="page-actions" element={<PageWorkspace />} />
               <Route path="page-actions/endpoints" element={<PageActionEndpointAssignment />} />
-              <Route path="access-visualization">
-                <Route index element={<Navigate to="user" replace />} />
-                <Route path="user" element={<UserAccessVisualization />} />
-                <Route path="ui" element={<UiAccessVisualization />} />
-              </Route>
+              <Route path="access-visualization/user" element={<UserAccessTreeView />} />
+              <Route path="access-visualization/ui" element={<UiAccessTreeView />} />
               <Route path="audit-logs" element={<AuditLogs />} />
             </Route>
 
