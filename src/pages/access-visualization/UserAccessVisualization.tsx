@@ -15,6 +15,15 @@ import {
 } from './graphUtils';
 import { api } from '../../services/api';
 import { AccessDenied } from '../../components/AccessDenied';
+import type {
+  ProcessedUserAccessData,
+  UserAccessMatrixEndpoint,
+  UserAccessMatrixPageAction,
+  UserAccessMatrixPolicy,
+  UserAccessMatrixResponse,
+  UserAccessMatrixRole,
+} from './userAccessUtils';
+import { calculateUserHierarchyCounts, mergePageKeysFromActions } from './userAccessUtils';
 
 const { Title } = Typography;
 const { Option } = Select;
@@ -24,54 +33,6 @@ interface UserData {
   username: string;
   fullName: string;
   email?: string;
-}
-
-interface UserAccessMatrixPageAction {
-  action: string;
-  label: string;
-  page?: {
-    key: string;
-    label: string;
-    route: string;
-  };
-}
-
-interface UserAccessMatrixEndpoint {
-  service: string;
-  version: string;
-  method: string;
-  path: string;
-  description?: string;
-  page_actions: UserAccessMatrixPageAction[];
-}
-
-interface UserAccessMatrixPolicy {
-  name: string;
-  description?: string;
-  endpoints: UserAccessMatrixEndpoint[];
-}
-
-interface UserAccessMatrixRole {
-  name: string;
-  description?: string;
-  policies: UserAccessMatrixPolicy[];
-}
-
-interface UserAccessMatrixResponse {
-  generated_at: string;
-  version: number;
-  filters: {
-    user_id: number;
-  };
-  roles: UserAccessMatrixRole[];
-}
-
-interface ProcessedUserAccessData {
-  id: number;
-  username: string;
-  fullName?: string;
-  email?: string;
-  roles: UserAccessMatrixRole[];
 }
 
 export const UserAccessVisualization: React.FC = () => {
@@ -129,39 +90,7 @@ export const UserAccessVisualization: React.FC = () => {
   const userSummary = useMemo(() => {
     if (!userAccessData) return null;
 
-    const roles = userAccessData.roles || [];
-    let policiesCount = 0;
-    let endpointsCount = 0;
-    let actionsCount = 0;
-    const pageKeys = new Set<string>();
-
-    roles.forEach((role) => {
-      const policies = role.policies || [];
-      policiesCount += policies.length;
-
-      policies.forEach((policy) => {
-        const endpoints = policy.endpoints || [];
-        endpointsCount += endpoints.length;
-
-        endpoints.forEach((endpoint) => {
-          const actions = endpoint.page_actions || [];
-          actionsCount += actions.length;
-
-          actions.forEach((action) => {
-            if (action.page) {
-              const pageKey =
-                action.page.key ||
-                action.page.route ||
-                action.page.label ||
-                action.label ||
-                action.action ||
-                '';
-              if (pageKey) pageKeys.add(pageKey);
-            }
-          });
-        });
-      });
-    });
+    const counts = calculateUserHierarchyCounts(userAccessData);
 
     const userLabel = userAccessData.fullName
       ? `${userAccessData.fullName} (${userAccessData.username})`
@@ -169,11 +98,11 @@ export const UserAccessVisualization: React.FC = () => {
 
     return {
       userLabel,
-      rolesLabel: summaryCountLabel(roles.length, 'role'),
-      policiesLabel: summaryCountLabel(policiesCount, 'policy', 'policies'),
-      endpointsLabel: summaryCountLabel(endpointsCount, 'endpoint'),
-      actionsLabel: summaryCountLabel(actionsCount, 'action'),
-      pagesLabel: summaryCountLabel(pageKeys.size, 'page'),
+      rolesLabel: summaryCountLabel(counts.rolesCount, 'role'),
+      policiesLabel: summaryCountLabel(counts.policiesCount, 'policy', 'policies'),
+      endpointsLabel: summaryCountLabel(counts.endpointsCount, 'endpoint'),
+      actionsLabel: summaryCountLabel(counts.actionsCount, 'action'),
+      pagesLabel: summaryCountLabel(counts.pagesCount, 'page'),
     };
   }, [userAccessData]);
 
@@ -199,6 +128,21 @@ export const UserAccessVisualization: React.FC = () => {
       const nextEdges: Edge<AccessEdgeData>[] = [];
       const userId = userData.id;
       const roles = userData.roles || [];
+      const userCounts = calculateUserHierarchyCounts(userData);
+      const userSummaryItems = [
+        summaryCountLabel(userCounts.rolesCount, 'role'),
+        summaryCountLabel(userCounts.policiesCount, 'policy', 'policies'),
+        summaryCountLabel(userCounts.endpointsCount, 'endpoint'),
+        summaryCountLabel(userCounts.pagesCount, 'page'),
+        summaryCountLabel(userCounts.actionsCount, 'action'),
+      ];
+      const hasUserHierarchy =
+        userCounts.rolesCount +
+          userCounts.policiesCount +
+          userCounts.endpointsCount +
+          userCounts.pagesCount +
+          userCounts.actionsCount >
+        0;
 
       const hasSearch = !!searchQuery;
       const matchesString = (value: string | undefined | null): boolean => {
@@ -247,6 +191,7 @@ export const UserAccessVisualization: React.FC = () => {
           title: userDisplayName,
           subtitle: userData.email,
           badges: [{ text: summaryCountLabel(roles.length, 'role') }],
+          summaryItems: hasUserHierarchy ? userSummaryItems : undefined,
           highlight: matchesUser(userData),
         })
       );
@@ -261,16 +206,19 @@ export const UserAccessVisualization: React.FC = () => {
         policies.forEach((policy) => {
           (policy.endpoints || []).forEach((endpoint) => {
             endpointCount += 1;
-            (endpoint.page_actions || []).forEach((action) => {
-              actionCount += 1;
-              if (action.page) {
-                const key =
-                  action.page.key || action.page.route || action.page.label || action.label || action.action || '';
-                if (key) uniquePages.add(key);
-              }
-            });
+            const endpointActions = endpoint.page_actions || [];
+            actionCount += endpointActions.length;
+            mergePageKeysFromActions(endpointActions, uniquePages);
           });
         });
+        const roleSummaryItems = [
+          summaryCountLabel(policies.length, 'policy', 'policies'),
+          summaryCountLabel(endpointCount, 'endpoint'),
+          summaryCountLabel(uniquePages.size, 'page'),
+          summaryCountLabel(actionCount, 'action'),
+        ];
+        const hasRoleHierarchy =
+          policies.length > 0 || endpointCount > 0 || uniquePages.size > 0 || actionCount > 0;
 
         nextNodes.push(
           createAccessNode(roleNodeId, 'role', {
@@ -286,6 +234,7 @@ export const UserAccessVisualization: React.FC = () => {
             collapsible: policies.length > 0,
             isExpanded: isRoleExpanded,
             onToggle: () => toggleNodeExpansion(roleNodeId),
+            summaryItems: hasRoleHierarchy ? roleSummaryItems : undefined,
           })
         );
 
@@ -308,14 +257,15 @@ export const UserAccessVisualization: React.FC = () => {
             endpoints.forEach((endpoint) => {
               const actions = endpoint.page_actions || [];
               totalActions += actions.length;
-              actions.forEach((actionItem) => {
-                if (actionItem.page) {
-                  const pageKey =
-                    actionItem.page.key || actionItem.page.route || actionItem.page.label || actionItem.action;
-                  if (pageKey) uniquePolicyPages.add(pageKey);
-                }
-              });
+              mergePageKeysFromActions(actions, uniquePolicyPages);
             });
+            const policySummaryItems = [
+              summaryCountLabel(endpoints.length, 'endpoint'),
+              summaryCountLabel(uniquePolicyPages.size, 'page'),
+              summaryCountLabel(totalActions, 'action'),
+            ];
+            const hasPolicyHierarchy =
+              endpoints.length > 0 || uniquePolicyPages.size > 0 || totalActions > 0;
 
             nextNodes.push(
               createAccessNode(policyNodeId, 'policy', {
@@ -330,6 +280,7 @@ export const UserAccessVisualization: React.FC = () => {
                 collapsible: endpoints.length > 0,
                 isExpanded: isPolicyExpanded,
                 onToggle: () => toggleNodeExpansion(policyNodeId),
+                summaryItems: hasPolicyHierarchy ? policySummaryItems : undefined,
               })
             );
 
@@ -353,6 +304,13 @@ export const UserAccessVisualization: React.FC = () => {
                 const actions = endpoint.page_actions || [];
                 const isEndpointExpanded = expanded.has(endpointNodeId);
                 const endpointHighlight = matchesEndpoint(endpoint);
+                const endpointPages = new Set<string>();
+                mergePageKeysFromActions(actions, endpointPages);
+                const endpointSummaryItems = [
+                  summaryCountLabel(endpointPages.size, 'page'),
+                  summaryCountLabel(actions.length, 'action'),
+                ];
+                const hasEndpointHierarchy = endpointPages.size > 0 || actions.length > 0;
 
                 const endpointBadges = [
                   { text: formatCountLabel(actions.length, 'action') },
@@ -369,6 +327,7 @@ export const UserAccessVisualization: React.FC = () => {
                     collapsible: actions.length > 0,
                     isExpanded: isEndpointExpanded,
                     onToggle: actions.length > 0 ? () => toggleNodeExpansion(endpointNodeId) : undefined,
+                    summaryItems: hasEndpointHierarchy ? endpointSummaryItems : undefined,
                   })
                 );
 
@@ -391,6 +350,8 @@ export const UserAccessVisualization: React.FC = () => {
                     const actionPages = action.page ? [action.page] : [];
                     const isActionExpanded = expanded.has(actionNodeId);
                     const actionHighlight = matchesPageAction(action);
+                    const actionSummaryItems =
+                      actionPages.length > 0 ? [summaryCountLabel(actionPages.length, 'page')] : undefined;
 
                     nextNodes.push(
                       createAccessNode(actionNodeId, 'action', {
@@ -403,6 +364,7 @@ export const UserAccessVisualization: React.FC = () => {
                         collapsible: actionPages.length > 0,
                         isExpanded: isActionExpanded,
                         onToggle: actionPages.length > 0 ? () => toggleNodeExpansion(actionNodeId) : undefined,
+                        summaryItems: actionSummaryItems,
                       })
                     );
 

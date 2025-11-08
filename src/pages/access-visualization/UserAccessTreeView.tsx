@@ -5,6 +5,13 @@ import type { TreeDataNode } from 'antd';
 import { api } from '../../services/api';
 import { AccessDenied } from '../../components/AccessDenied';
 import { summaryCountLabel } from './graphUtils';
+import type { ProcessedUserAccessData, UserAccessMatrixResponse } from './userAccessUtils';
+import {
+  calculateEndpointHierarchyCounts,
+  calculatePolicyHierarchyCounts,
+  calculateRoleHierarchyCounts,
+  calculateUserHierarchyCounts,
+} from './userAccessUtils';
 
 const { Title } = Typography;
 const { Option } = Select;
@@ -14,54 +21,6 @@ interface UserData {
   username: string;
   fullName: string;
   email?: string;
-}
-
-interface UserAccessMatrixPageAction {
-  action: string;
-  label: string;
-  page?: {
-    key: string;
-    label: string;
-    route: string;
-  };
-}
-
-interface UserAccessMatrixEndpoint {
-  service: string;
-  version: string;
-  method: string;
-  path: string;
-  description?: string;
-  page_actions: UserAccessMatrixPageAction[];
-}
-
-interface UserAccessMatrixPolicy {
-  name: string;
-  description?: string;
-  endpoints: UserAccessMatrixEndpoint[];
-}
-
-interface UserAccessMatrixRole {
-  name: string;
-  description?: string;
-  policies: UserAccessMatrixPolicy[];
-}
-
-interface UserAccessMatrixResponse {
-  generated_at: string;
-  version: number;
-  filters: {
-    user_id: number;
-  };
-  roles: UserAccessMatrixRole[];
-}
-
-interface ProcessedUserAccessData {
-  id: number;
-  username: string;
-  fullName?: string;
-  email?: string;
-  roles: UserAccessMatrixRole[];
 }
 
 const highlightText = (text: string, query: string) => {
@@ -88,6 +47,14 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
   const userLabel = userData.fullName
     ? `${userData.fullName} (${userData.username})`
     : userData.username;
+  const userCounts = calculateUserHierarchyCounts(userData);
+  const userSummaryItems = [
+    summaryCountLabel(userCounts.rolesCount, 'role'),
+    summaryCountLabel(userCounts.policiesCount, 'policy', 'policies'),
+    summaryCountLabel(userCounts.endpointsCount, 'endpoint'),
+    summaryCountLabel(userCounts.pagesCount, 'page'),
+    summaryCountLabel(userCounts.actionsCount, 'action'),
+  ];
 
   const TAG_COLORS = {
     user: 'blue',
@@ -111,20 +78,31 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
     return METHOD_COLORS[key] ?? 'geekblue';
   };
 
+  const formatSummaryItems = (summary?: string | Array<string | undefined>) => {
+    if (Array.isArray(summary)) {
+      const filtered = summary.filter((item): item is string => Boolean(item));
+      return filtered.length ? filtered.join(', ') : undefined;
+    }
+    return summary || undefined;
+  };
+
   const createTitleRow = (
     content: ReactNode,
     typeLabel: string,
     tagColor: string,
-    childCountLabel?: string
-  ) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      {content}
-      <Tag color={tagColor} style={{ marginInlineStart: 0 }}>
-        {typeLabel}
-      </Tag>
-      {childCountLabel ? <span style={{ color: '#8c8c8c', fontSize: 12 }}>[{childCountLabel}]</span> : null}
-    </div>
-  );
+    summary?: string | Array<string | undefined>
+  ) => {
+    const summaryText = formatSummaryItems(summary);
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {content}
+        <Tag color={tagColor} style={{ marginInlineStart: 0 }}>
+          {typeLabel}
+        </Tag>
+        {summaryText ? <span style={{ color: '#8c8c8c', fontSize: 12 }}>[{summaryText}]</span> : null}
+      </div>
+    );
+  };
 
   const renderDescriptionLine = (displayText?: string, tooltipText?: string) => {
     if (!displayText) return null;
@@ -154,7 +132,7 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
           <strong>{highlightText(userLabel, searchQuery)}</strong>,
           'User',
           TAG_COLORS.user,
-          summaryCountLabel(roles.length, 'role')
+          userSummaryItems
         )}
         {renderDescriptionLine(userData.email)}
       </div>
@@ -162,6 +140,13 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
     children: roles.map((role, roleIndex) => {
       const roleNodeKey = `role-${userData.id}-${roleIndex}`;
       const policies = role.policies || [];
+      const roleCounts = calculateRoleHierarchyCounts(role);
+      const roleSummaryItems = [
+        summaryCountLabel(roleCounts.policiesCount, 'policy', 'policies'),
+        summaryCountLabel(roleCounts.endpointsCount, 'endpoint'),
+        summaryCountLabel(roleCounts.pagesCount, 'page'),
+        summaryCountLabel(roleCounts.actionsCount, 'action'),
+      ];
       return {
         key: roleNodeKey,
         title: (
@@ -170,7 +155,7 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
               <strong>{highlightText(role.name, searchQuery)}</strong>,
               'Role',
               TAG_COLORS.role,
-              summaryCountLabel(policies.length, 'policy', 'policies')
+              roleSummaryItems
             )}
             {renderDescriptionLine(role.description)}
           </div>
@@ -178,6 +163,12 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
         children: policies.map((policy, policyIndex) => {
           const policyNodeKey = `${roleNodeKey}-policy-${policyIndex}`;
           const endpoints = policy.endpoints || [];
+          const policyCounts = calculatePolicyHierarchyCounts(policy);
+          const policySummaryItems = [
+            summaryCountLabel(policyCounts.endpointsCount, 'endpoint'),
+            summaryCountLabel(policyCounts.pagesCount, 'page'),
+            summaryCountLabel(policyCounts.actionsCount, 'action'),
+          ];
           return {
             key: policyNodeKey,
             title: (
@@ -186,7 +177,7 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
                   <strong>{highlightText(policy.name, searchQuery)}</strong>,
                   'Policy',
                   TAG_COLORS.policy,
-                  summaryCountLabel(endpoints.length, 'endpoint')
+                  policySummaryItems
                 )}
                 {renderDescriptionLine(policy.description)}
               </div>
@@ -194,6 +185,11 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
             children: endpoints.map((endpoint, endpointIndex) => {
               const endpointNodeKey = `${policyNodeKey}-endpoint-${endpointIndex}`;
               const actions = endpoint.page_actions || [];
+              const endpointCounts = calculateEndpointHierarchyCounts(endpoint);
+              const endpointSummaryItems = [
+                summaryCountLabel(endpointCounts.actionsCount, 'action'),
+                summaryCountLabel(endpointCounts.pagesCount, 'page'),
+              ];
               const endpointTitle = `${endpoint.method} ${endpoint.path}`;
               const serviceInfo = [endpoint.service, endpoint.version].filter(Boolean).join(' • ');
               const methodTag = endpoint.method ? (
@@ -218,7 +214,7 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
                       endpointContent,
                       'Endpoint',
                       TAG_COLORS.endpoint,
-                      summaryCountLabel(actions.length, 'action')
+                      endpointSummaryItems
                     )}
                     {renderDescriptionLine(endpointDescription, endpointTooltipText)}
                   </div>
@@ -229,6 +225,7 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
                   const page = action.page
                     ? `${action.page.label ?? action.page.key} ${action.page.route ?? ''}`.trim()
                     : '';
+                  const actionSummaryItems = action.page ? [summaryCountLabel(1, 'page')] : undefined;
                   return {
                     key: actionNodeKey,
                     title: (
@@ -237,7 +234,7 @@ const buildTreeData = (userData: ProcessedUserAccessData, searchQuery: string): 
                           <strong>{highlightText(actionLabel, searchQuery)}</strong>,
                           'Page Action',
                           TAG_COLORS.action,
-                          undefined
+                          actionSummaryItems
                         )}
                         {renderDescriptionLine(page)}
                       </div>
@@ -300,36 +297,7 @@ export const UserAccessTreeView: React.FC = () => {
   const userSummary = useMemo(() => {
     if (!userAccessData) return null;
 
-    const roles = userAccessData.roles || [];
-    let policiesCount = 0;
-    let endpointsCount = 0;
-    let actionsCount = 0;
-    const pageKeys = new Set<string>();
-
-    roles.forEach((role) => {
-      const policies = role.policies || [];
-      policiesCount += policies.length;
-      policies.forEach((policy) => {
-        const endpoints = policy.endpoints || [];
-        endpointsCount += endpoints.length;
-        endpoints.forEach((endpoint) => {
-          const actions = endpoint.page_actions || [];
-          actionsCount += actions.length;
-          actions.forEach((action) => {
-            if (action.page) {
-              const key =
-                action.page.key ||
-                action.page.route ||
-                action.page.label ||
-                action.label ||
-                action.action ||
-                '';
-              if (key) pageKeys.add(key);
-            }
-          });
-        });
-      });
-    });
+    const counts = calculateUserHierarchyCounts(userAccessData);
 
     const userLabel = userAccessData.fullName
       ? `${userAccessData.fullName} (${userAccessData.username})`
@@ -337,11 +305,11 @@ export const UserAccessTreeView: React.FC = () => {
 
     return {
       userLabel,
-      rolesLabel: summaryCountLabel(roles.length, 'role'),
-      policiesLabel: summaryCountLabel(policiesCount, 'policy', 'policies'),
-      endpointsLabel: summaryCountLabel(endpointsCount, 'endpoint'),
-      actionsLabel: summaryCountLabel(actionsCount, 'action'),
-      pagesLabel: summaryCountLabel(pageKeys.size, 'page'),
+      rolesLabel: summaryCountLabel(counts.rolesCount, 'role'),
+      policiesLabel: summaryCountLabel(counts.policiesCount, 'policy', 'policies'),
+      endpointsLabel: summaryCountLabel(counts.endpointsCount, 'endpoint'),
+      actionsLabel: summaryCountLabel(counts.actionsCount, 'action'),
+      pagesLabel: summaryCountLabel(counts.pagesCount, 'page'),
     };
   }, [userAccessData]);
 

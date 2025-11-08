@@ -4,14 +4,15 @@ import { Card, Spin, Alert, Typography, Space, Button, Input, Tree, Select, Tag,
 import type { TreeDataNode } from 'antd';
 import { api } from '../../services/api';
 import { AccessDenied } from '../../components/AccessDenied';
-import { formatCountLabel } from './graphUtils';
-import type { PageNode, RawPageNode, PageAction } from './pageDataUtils';
+import { formatCountLabel, summaryCountLabel } from './graphUtils';
+import type { PageNode, RawPageNode, PageAction, PageAggregate } from './pageDataUtils';
 import {
   buildHierarchy,
   normalizePageNodes,
   collectPageNodeIds,
   collectEndpointIds,
   findPageById,
+  buildPageAggregateMap,
 } from './pageDataUtils';
 
 const { Title } = Typography;
@@ -62,20 +63,31 @@ const getMethodColor = (method?: string) => {
   return METHOD_COLORS[key] ?? 'geekblue';
 };
 
+const formatSummaryItems = (summary?: string | Array<string | undefined>) => {
+  if (Array.isArray(summary)) {
+    const filtered = summary.filter((item): item is string => Boolean(item));
+    return filtered.length ? filtered.join(', ') : undefined;
+  }
+  return summary || undefined;
+};
+
 const createTitleRow = (
   content: ReactNode,
   typeLabel: string,
   tagColor: string,
-  childCountLabel?: string
-) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-    {content}
-    <Tag color={tagColor} style={{ marginInlineStart: 0 }}>
-      {typeLabel}
-    </Tag>
-    {childCountLabel ? <span style={{ color: '#8c8c8c', fontSize: 12 }}>[{childCountLabel}]</span> : null}
-  </div>
-);
+  summary?: string | Array<string | undefined>
+) => {
+  const summaryText = formatSummaryItems(summary);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      {content}
+      <Tag color={tagColor} style={{ marginInlineStart: 0 }}>
+        {typeLabel}
+      </Tag>
+      {summaryText ? <span style={{ color: '#8c8c8c', fontSize: 12 }}>[{summaryText}]</span> : null}
+    </div>
+  );
+};
 
 const renderDescriptionLine = (displayText?: string, tooltipText?: string, highlight?: (value: string) => ReactNode) => {
   if (!displayText) return null;
@@ -97,10 +109,22 @@ const renderDescriptionLine = (displayText?: string, tooltipText?: string, highl
   return <Tooltip title={tooltipText ?? displayText}>{content}</Tooltip>;
 };
 
-const buildPageTreeNode = (page: PageNode, searchQuery: string): TreeDataNode => {
+const buildPageTreeNode = (
+  page: PageNode,
+  searchQuery: string,
+  aggregateMap: Map<number, PageAggregate>
+): TreeDataNode => {
   const highlight = (value: string) => highlightText(value, searchQuery);
+  const aggregate = aggregateMap.get(page.id);
+  const pageSummaryItems = aggregate
+    ? [
+        summaryCountLabel(aggregate.descendantPages, 'page'),
+        summaryCountLabel(aggregate.actions, 'action'),
+        summaryCountLabel(aggregate.endpoints, 'endpoint'),
+      ]
+    : undefined;
 
-  const childPageNodes = (page.children || []).map((child) => buildPageTreeNode(child, searchQuery));
+  const childPageNodes = (page.children || []).map((child) => buildPageTreeNode(child, searchQuery, aggregateMap));
 
   const actionChildren: TreeDataNode[] = (page.actions || []).map((action: PageAction, index) => {
     const actionKey = `page-${page.id}-action-${index}`;
@@ -133,6 +157,7 @@ const buildPageTreeNode = (page: PageNode, searchQuery: string): TreeDataNode =>
           ),
         }
       : undefined;
+    const actionSummaryItems = endpointNode ? [summaryCountLabel(1, 'endpoint')] : undefined;
 
     return {
       key: actionKey,
@@ -142,7 +167,7 @@ const buildPageTreeNode = (page: PageNode, searchQuery: string): TreeDataNode =>
             <strong>{highlight(action.label || action.action || 'Action')}</strong>,
             'Page Action',
             TAG_COLORS.action,
-            endpointNode ? formatCountLabel(1, 'endpoint') : undefined
+            actionSummaryItems
           )}
           {renderDescriptionLine(action.action && action.action !== action.label ? action.action : undefined, undefined, highlight)}
         </div>
@@ -150,13 +175,6 @@ const buildPageTreeNode = (page: PageNode, searchQuery: string): TreeDataNode =>
       children: endpointNode ? [endpointNode] : undefined,
     };
   });
-
-  const childCountLabels = [
-    formatCountLabel(childPageNodes.length, 'child page'),
-    formatCountLabel(actionChildren.length, 'action'),
-  ]
-    .filter(Boolean)
-    .join(', ');
 
   return {
     key: `page-${page.id}`,
@@ -166,7 +184,7 @@ const buildPageTreeNode = (page: PageNode, searchQuery: string): TreeDataNode =>
           <strong>{highlight(page.label)}</strong>,
           'Page',
           TAG_COLORS.page,
-          childCountLabels || undefined
+          pageSummaryItems
         )}
         {renderDescriptionLine(page.route, page.route, highlight)}
       </div>
@@ -216,7 +234,8 @@ export const UiAccessTreeView: React.FC = () => {
 
   const buildTree = useCallback(
     (pages: PageNode[], query: string, expandAll = false) => {
-      const tree = pages.map((page) => buildPageTreeNode(page, query));
+      const aggregateMap = buildPageAggregateMap(pages);
+      const tree = pages.map((page) => buildPageTreeNode(page, query, aggregateMap));
       setTreeData(tree);
       if (tree.length) {
         setExpandedKeys(expandAll ? flattenTree(tree) : tree.map((node) => node.key));
@@ -282,7 +301,8 @@ export const UiAccessTreeView: React.FC = () => {
     const expanded = new Set<string>();
     collectPageNodeIds(found, expanded);
     collectEndpointIds(found, expanded);
-    const tree = [buildPageTreeNode(found, '')];
+    const aggregateMap = buildPageAggregateMap([found]);
+    const tree = [buildPageTreeNode(found, '', aggregateMap)];
     setTreeData(tree);
     setExpandedKeys(Array.from(expanded));
     setAutoExpandParent(true);

@@ -15,6 +15,7 @@ import {
 } from './graphUtils';
 import { api } from '../../services/api';
 import { AccessDenied } from '../../components/AccessDenied';
+import { buildPageAggregateMap } from './pageDataUtils';
 
 const { Title } = Typography;
 const { Option } = Select;
@@ -198,6 +199,7 @@ const clonePageNode = (
 
   return cloned;
 };
+
 
 const buildHierarchy = (nodes: PageNode[]): PageNode[] => {
   const roots: PageNode[] = [];
@@ -431,6 +433,7 @@ export const UiAccessVisualization: React.FC = () => {
     (allPages: PageNode[], expanded: Set<string>) => {
       const nextNodes: Node<AccessNodeData>[] = [];
       const nextEdges: Edge<AccessEdgeData>[] = [];
+      const pageAggregates = buildPageAggregateMap(allPages);
 
       const matchesSearchValue = (value?: string) => !!searchQuery && !!value && nodeMatchesSearch(value, searchQuery);
 
@@ -457,6 +460,17 @@ export const UiAccessVisualization: React.FC = () => {
         const hasChildren = !!(node.children && node.children.length > 0);
         const hasActions = !!(node.actions && node.actions.length > 0);
         const highlight = subtreeMatchesSearch(node);
+        const aggregate = pageAggregates.get(node.id);
+        const hasSummaryData =
+          !!aggregate && (aggregate.descendantPages > 0 || aggregate.actions > 0 || aggregate.endpoints > 0);
+        const summaryItems =
+          aggregate && hasSummaryData
+            ? [
+                summaryCountLabel(aggregate.descendantPages, 'page'),
+                summaryCountLabel(aggregate.actions, 'action'),
+                summaryCountLabel(aggregate.endpoints, 'endpoint'),
+              ]
+            : undefined;
 
         nextNodes.push(
           createAccessNode(nodeId, 'page', {
@@ -470,6 +484,7 @@ export const UiAccessVisualization: React.FC = () => {
             collapsible: hasChildren || hasActions,
             isExpanded,
             onToggle: hasChildren || hasActions ? () => toggleNodeExpansion(nodeId) : undefined,
+            summaryItems,
           })
         );
 
@@ -491,6 +506,7 @@ export const UiAccessVisualization: React.FC = () => {
               matchesSearchValue(action.label) ||
               matchesSearchValue(action.action) ||
               matchesSearchValue(action.endpoint);
+            const actionSummaryItems = hasEndpoint ? [summaryCountLabel(1, 'endpoint')] : undefined;
 
             nextNodes.push(
               createAccessNode(actionNodeId, 'action', {
@@ -501,6 +517,7 @@ export const UiAccessVisualization: React.FC = () => {
                 collapsible: hasEndpoint,
                 isExpanded: expanded.has(actionNodeId),
                 onToggle: hasEndpoint ? () => toggleNodeExpansion(actionNodeId) : undefined,
+                summaryItems: actionSummaryItems,
               })
             );
 
@@ -552,6 +569,7 @@ export const UiAccessVisualization: React.FC = () => {
       const nextNodes: Node<AccessNodeData>[] = [];
       const nextEdges: Edge<AccessEdgeData>[] = [];
       const { forceExpand = false, selectedId } = options;
+      const aggregateMap = buildPageAggregateMap([pageNode]);
 
       const matchesSearchValue = (value?: string) => !!searchQuery && !!value && nodeMatchesSearch(value, searchQuery);
 
@@ -570,6 +588,17 @@ export const UiAccessVisualization: React.FC = () => {
               matchesSearchValue(action.action) ||
               matchesSearchValue(action.endpoint)
           );
+        const aggregate = aggregateMap.get(node.id);
+        const hasSummaryData =
+          !!aggregate && (aggregate.descendantPages > 0 || aggregate.actions > 0 || aggregate.endpoints > 0);
+        const summaryItems =
+          aggregate && hasSummaryData
+            ? [
+                summaryCountLabel(aggregate.descendantPages, 'page'),
+                summaryCountLabel(aggregate.actions, 'action'),
+                summaryCountLabel(aggregate.endpoints, 'endpoint'),
+              ]
+            : undefined;
 
         nextNodes.push(
           createAccessNode(nodeId, 'page', {
@@ -583,6 +612,7 @@ export const UiAccessVisualization: React.FC = () => {
             collapsible: hasChildren || hasActions,
             isExpanded,
             onToggle: hasChildren || hasActions ? () => toggleNodeExpansion(nodeId) : undefined,
+            summaryItems,
           })
         );
 
@@ -604,6 +634,7 @@ export const UiAccessVisualization: React.FC = () => {
               matchesSearchValue(action.label) ||
               matchesSearchValue(action.action) ||
               matchesSearchValue(action.endpoint);
+            const actionSummaryItems = hasEndpoint ? [summaryCountLabel(1, 'endpoint')] : undefined;
 
             nextNodes.push(
               createAccessNode(actionNodeId, 'action', {
@@ -614,6 +645,7 @@ export const UiAccessVisualization: React.FC = () => {
                 collapsible: hasEndpoint,
                 isExpanded: expanded.has(actionNodeId),
                 onToggle: hasEndpoint ? () => toggleNodeExpansion(actionNodeId) : undefined,
+                summaryItems: actionSummaryItems,
               })
             );
 

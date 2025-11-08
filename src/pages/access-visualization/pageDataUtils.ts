@@ -234,3 +234,39 @@ export const findPageById = (pages: PageNode[], pageId: number): PageNode | null
   }
   return null;
 };
+
+export interface PageAggregate {
+  descendantPages: number;
+  actions: number;
+  endpoints: number;
+}
+
+const countEndpointsForActions = (actions: PageAction[] | undefined): number => {
+  if (!actions) return 0;
+  return actions.reduce((total, action) => total + (action.endpoint || action.endpoint_details ? 1 : 0), 0);
+};
+
+const computePageAggregate = (node: PageNode, map: Map<number, PageAggregate>): PageAggregate => {
+  const directActions = node.actions?.length ?? 0;
+  const directEndpoints = countEndpointsForActions(node.actions);
+  let descendantPages = 0;
+  let actions = directActions;
+  let endpoints = directEndpoints;
+
+  (node.children || []).forEach((child) => {
+    const childAggregate = computePageAggregate(child, map);
+    descendantPages += 1 + childAggregate.descendantPages;
+    actions += childAggregate.actions;
+    endpoints += childAggregate.endpoints;
+  });
+
+  const aggregate = { descendantPages, actions, endpoints };
+  map.set(node.id, aggregate);
+  return aggregate;
+};
+
+export const buildPageAggregateMap = (roots: PageNode[]): Map<number, PageAggregate> => {
+  const aggregateMap = new Map<number, PageAggregate>();
+  roots.forEach((root) => computePageAggregate(root, aggregateMap));
+  return aggregateMap;
+};

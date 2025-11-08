@@ -37,6 +37,7 @@ export interface AccessNodeData {
   subtitle?: string;
   description?: string;
   badges?: NodeBadge[];
+  summaryItems?: string[];
   highlight?: boolean;
   collapsible?: boolean;
   isExpanded?: boolean;
@@ -79,6 +80,9 @@ const AccessNode = ({ data }: NodeProps<AccessNodeData>) => {
     data.onToggle?.();
   };
 
+  const summaryItems = data.summaryItems?.map((item) => item?.trim()).filter((item): item is string => !!item);
+  const summaryText = summaryItems && summaryItems.length ? summaryItems.join(', ') : null;
+
   return (
     <div
       style={{
@@ -98,21 +102,40 @@ const AccessNode = ({ data }: NodeProps<AccessNodeData>) => {
     >
       <Handle type="target" position={Position.Top} style={hiddenHandleStyle} isConnectable={false} />
       <Handle type="source" position={Position.Bottom} style={hiddenHandleStyle} isConnectable={false} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <Tooltip title={data.title}>
-          <div
-            style={{
-              flex: 1,
-              fontSize: 14,
-              fontWeight: 600,
-              color: palette.accent,
-              lineHeight: 1.35,
-              ...clampStyle(2),
-            }}
-          >
-            {data.title}
-          </div>
-        </Tooltip>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 8,
+          alignItems: summaryText ? 'flex-start' : 'center',
+        }}
+      >
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: summaryText ? 4 : 0 }}>
+          <Tooltip title={data.title}>
+            <div
+              style={{
+                fontSize: 14,
+                fontWeight: 600,
+                color: palette.accent,
+                lineHeight: 1.35,
+                ...clampStyle(2),
+              }}
+            >
+              {data.title}
+            </div>
+          </Tooltip>
+          {summaryText ? (
+            <div
+              style={{
+                fontSize: 12,
+                color: '#8c8c8c',
+                lineHeight: 1.3,
+              }}
+            >
+              [{summaryText}]
+            </div>
+          ) : null}
+        </div>
         {data.collapsible ? (
           <button
             onClick={handleToggle}
